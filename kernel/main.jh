@@ -1,0 +1,26 @@
+import std.env
+import std.fs
+import std.io
+import std.sys
+import kernel
+
+fn run() -> Result(kernel.Report, String) {
+    let args = env.args()
+    if args.len() != 4 { return Err("usage: kernel THEORY GOALS PROOF") }
+    let source = fs.read_file(args[1])?
+    let th = kernel.Theory.parse(source.as_str())?
+    let goals = fs.read_file(args[2])?
+    let reader = io.BufReader.open(args[3])?
+    th.check_reader(goals.as_str(), reader)
+}
+
+fn main() {
+    match run() {
+        Ok(r) => println("ACCEPT: " + r.goals.to_string() + " goals, " + r.steps.to_string() +
+            " proof steps, " + r.bytes.to_string() + " bytes, " + r.terms.to_string() + " distinct terms")
+        Err(e) => {
+            eprintln("REJECT: " + e.as_str())
+            sys.exit(1)
+        }
+    }
+}

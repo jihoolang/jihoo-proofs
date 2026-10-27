@@ -1,0 +1,450 @@
+// Port of Horn's trusted many-sorted ground Horn certificate checker.
+// No object-language reduction, substitution, typing or equality algorithm.
+import std.io
+import lex
+import sexp
+
+const PROP: u32 = 0xffffffff
+const NONE: u32 = 0xffffffff
+
+struct Symbol { inputs: Vec(u32), output: u32 }
+enum Pattern { Var(i64), App(u32, Vec(Pattern)) }
+struct Rule {
+    vars: Vec((String, u32))
+    premises: Vec(Pattern)
+    conclusion: Pattern
+}
+
+pub struct Theory {
+    sorts: Map(String, u32)
+    constructors: Map(String, u32)
+    predicates: Map(String, u32)
+    symbols: Vec(Symbol)
+    rules: Map(String, Rule)
+}
+
+fn name(x: sexp.Sexp) -> Result(str, String) {
+    let s = x.atom()?
+    if s.starts_with("?") { return Err("declaration names cannot be variables") }
+    Ok(s)
+}
+
+impl Theory {
+    pub fn parse(source: str) -> Result(Theory, String) {
+        var th = Theory {
+            sorts: Map(String, u32).new()
+            constructors: Map(String, u32).new()
+            predicates: Map(String, u32).new()
+            symbols: Vec(Symbol).new()
+            rules: Map(String, Rule).new()
+        }
+        let forms = sexp.parse(source)?
+        for form in forms {
+            let xs = form.list()?
+            if xs.len == 0 { return Err("empty declaration") }
+            let tag = xs[0].atom()?
+            if tag == "sort" && xs.len == 2 {
+                let id = th.sorts.len() as u32
+                if th.sorts.insert(name(xs[1])?.to_string(), id).is_some() {
+                    return Err("duplicate sort")
+                }
+            } else if (tag == "ctor" && xs.len == 4) || (tag == "pred" && xs.len == 3) {
+                let key = name(xs[1])?.to_string()
+                var inputs = Vec(u32).new()
+                for s in xs[2].list()? { inputs.push(th.sort(s)?) }
+                let id = th.symbols.len() as u32
+                let output = if tag == "ctor" { th.sort(xs[3])? } else { PROP }
+                let old = if tag == "ctor" {
+                    th.constructors.insert(key, id)
+                } else { th.predicates.insert(key, id) }
+                if old.is_some() { return Err("duplicate " + tag) }
+                th.symbols.push(Symbol { inputs, output })
+            } else if tag == "rule" && xs.len == 4 {
+                var vars = Vec((String, u32)).new()
+                var premises = Vec(Pattern).new()
+                for j in xs[2].list()? { premises.push(th.pattern(j, PROP, &vars)?) }
+                let conclusion = th.pattern(xs[3], PROP, &vars)?
+                let rule = Rule { vars, premises, conclusion }
+                if th.rules.insert(name(xs[1])?.to_string(), rule).is_some() {
+                    return Err("duplicate rule")
+                }
+            } else { return Err("invalid theory declaration") }
+        }
+        Ok(th)
+    }
+
+    fn sort(self, x: sexp.Sexp) -> Result(u32, String) {
+        let s = name(x)?
+        match self.sorts.get(s) {
+            Some(id) => Ok(id)
+            None => Err("unknown sort " + s)
+        }
+    }
+
+    fn constructor(self, c: str) -> Result(u32, String) {
+        match self.constructors.get(c) {
+            Some(id) => Ok(id)
+            None => Err("unknown constructor " + c)
+        }
+    }
+
+    fn predicate(self, p: str) -> Result(u32, String) {
+        match self.predicates.get(p) {
+            Some(id) => Ok(id)
+            None => Err("unknown predicate " + p)
+        }
+    }
+
+    fn pattern(self, x: sexp.Sexp, sort: u32, inout vars: Vec((String, u32))) -> Result(Pattern, String) {
+        if sort == PROP {
+            let xs = x.list()?
+            if xs.len == 0 { return Err("empty judgment") }
+            return self.application(self.predicate(xs[0].atom()?)?, xs[1..], sort, &vars)
+        }
+        match x {
+            Atom(v) => {
+                if v.as_str().starts_with("?") {
+                    if v.len() == 1 { return Err("invalid ground variable " + v.as_str()) }
+                    for i in 0..vars.len() {
+                        if vars[i].0 == v {
+                            if vars[i].1 != sort { return Err("variable has conflicting sorts") }
+                            return Ok(Pattern.Var(i))
+                        }
+                    }
+                    vars.push((v.clone(), sort))
+                    return Ok(Pattern.Var(vars.len() - 1))
+                }
+                self.application(self.constructor(v.as_str())?, [], sort, &vars)
+            }
+            List(xs) => {
+                if xs.is_empty() { return Err("empty term") }
+                let h = xs[0].atom()?
+                if xs.len() == 1 { return Err("nullary constructors must be atoms") }
+                self.application(self.constructor(h)?, xs.as_slice()[1..], sort, &vars)
+            }
+        }
+    }
+
+    fn application(self, head: u32, args: [sexp.Sexp], sort: u32, inout vars: Vec((String, u32))) -> Result(Pattern, String) {
+        let symbol = self.symbols[head as i64]
+        if symbol.output != sort || symbol.inputs.len() != args.len {
+            return Err("sort or arity mismatch")
+        }
+        var out = Vec(Pattern).new()
+        for i in 0..args.len { out.push(self.pattern(args[i], symbol.inputs[i], &vars)?) }
+        Ok(Pattern.App(head, out))
+    }
+
+    pub fn check(self, goals: str, proof: str) -> Result(Report, String) {
+        self.check_reader(goals, io.StrReader.new(proof))
+    }
+
+    pub fn check_reader(self, comptime R: io.BufRead, goals_source: str, sink proof: R) -> Result(Report, String) {
+        var ck = Checker { th: self, arena: Arena.new(), defs: Map(String, u32).new(), stack: Vec(u32).new() }
+        var goals = Map(String, u32).new()
+        var lx = lex.Lexer.new(io.StrReader.new(goals_source))
+        while lx.peek()?.is_some() {
+            open(&lx, 0)?
+            if atom(&lx, 1)? != "goal" { return Err("expected (goal name judgment)") }
+            let key = atom(&lx, 1)?.to_string()
+            if key.as_str().starts_with("?") { return Err("declaration names cannot be variables") }
+            let judgment = ck.judgment(&lx, 1)?
+            end(&lx)?
+            if goals.insert(key, judgment).is_some() { return Err("duplicate goal") }
+        }
+        if goals.is_empty() { return Err("no expected goals") }
+        let goal_count = goals.len()
+        var steps = Vec(u32).new()
+        var px = lex.Lexer.new(proof)
+        while px.peek()?.is_some() {
+            open(&px, 0)?
+            match atom(&px, 1)? {
+                "step" => ck.step(&px, &steps)?
+                "result" => {
+                    let key = atom(&px, 1)?
+                    let expected = match goals.remove(key) {
+                        Some(j) => j
+                        None => return Err("unknown or repeated result " + key)
+                    }
+                    let n = index(&px, 1)?
+                    if n >= steps.len() { return Err("unknown result step") }
+                    if steps[n] != expected { return Err("result does not match the expected judgment") }
+                }
+                "def" => {
+                    let key = atom(&px, 1)?.to_string()
+                    if !key.as_str().starts_with("?") || key.len() == 1 { return Err("invalid abbreviation name") }
+                    let term = ck.term(&px, 1)?
+                    if ck.defs.insert(key, term).is_some() { return Err("duplicate abbreviation") }
+                }
+                _ => return Err("invalid proof form")
+            }
+            end(&px)?
+        }
+        if !goals.is_empty() { return Err("missing results") }
+        Ok(Report { steps: steps.len(), goals: goal_count, terms: ck.arena.len(), bytes: px.bytes() })
+    }
+}
+
+// Nodes are [head, argument indices...]. Hashes select slots; full nodes
+// decide equality. Only Checker.make may create well-sorted ground nodes.
+struct Arena {
+    data: Vec(u32)
+    starts: Vec(i64)
+    table: Vec(u32)
+    bits: u32
+}
+
+impl Arena {
+    fn new() -> Arena {
+        var starts = Vec(i64).new()
+        starts.push(0)
+        Arena { data: Vec(u32).new(), starts, table: Vec(u32).filled(1024, NONE), bits: 10 }
+    }
+
+    fn len(self) -> i64 { self.starts.len() - 1 }
+
+    fn node(self, id: u32) -> [u32] {
+        self.data.as_slice()[self.starts[id as i64]..self.starts[id as i64 + 1]]
+    }
+
+    fn slot(self, key: [u32]) -> i64 {
+        var h: u64 = 0
+        for x in key { h = (((h << 5) | (h >> 59)) ^ x as u64) *% 0x517cc1b727220a95 }
+        (h >> (64 - self.bits)) as i64
+    }
+
+    fn intern(inout self, key: [u32]) -> Result(u32, String) {
+        if 2 * self.len() >= self.table.len() {
+            self.bits += 1
+            self.table = Vec(u32).filled(1 << self.bits, NONE)
+            for n in 0..self.len() {
+                let id = n as u32
+                var i = self.slot(self.node(id))
+                while self.table[i] != NONE { i = (i + 1) & (self.table.len() - 1) }
+                self.table[i] = id
+            }
+        }
+        var i = self.slot(key)
+        while self.table[i] != NONE {
+            if equal_node(self.node(self.table[i]), key) { return Ok(self.table[i]) }
+            i = (i + 1) & (self.table.len() - 1)
+        }
+        if self.len() >= NONE as i64 { return Err("too many distinct terms") }
+        let id = self.len() as u32
+        for x in key { self.data.push(x) }
+        self.starts.push(self.data.len())
+        self.table[i] = id
+        Ok(id)
+    }
+}
+
+fn equal_node(a: [u32], b: [u32]) -> bool {
+    if a.len != b.len { return false }
+    for i in 0..a.len { if a[i] != b[i] { return false } }
+    true
+}
+
+struct Checker {
+    th: ref Theory
+    arena: Arena
+    defs: Map(String, u32)
+    stack: Vec(u32)
+}
+
+impl Checker {
+    fn sort(self, id: u32) -> u32 { self.th.symbols[self.arena.node(id)[0] as i64].output }
+
+    fn make(inout self, base: i64) -> Result(u32, String) {
+        let key = self.stack.as_slice()[base..]
+        let symbol = self.th.symbols[key[0] as i64]
+        if symbol.inputs.len() + 1 != key.len { return Err("sort or arity mismatch") }
+        for i in 0..symbol.inputs.len() {
+            if self.sort(key[i + 1]) != symbol.inputs[i] { return Err("sort or arity mismatch") }
+        }
+        let id = self.arena.intern(key)?
+        self.stack.truncate(base)
+        Ok(id)
+    }
+
+    fn args(inout self, comptime R: io.BufRead, inout lx: lex.Lexer(R), head: u32, depth: i64) -> Result(u32, String) {
+        let base = self.stack.len()
+        self.stack.push(head)
+        while !lx.at_close()? {
+            let arg = self.term(&lx, depth)?
+            self.stack.push(arg)
+        }
+        lx.token()?
+        if self.stack.len() == base + 1 && self.th.symbols[head as i64].output != PROP {
+            return Err("nullary constructors must be atoms")
+        }
+        self.make(base)
+    }
+
+    fn term(inout self, comptime R: io.BufRead, inout lx: lex.Lexer(R), depth: i64) -> Result(u32, String) {
+        match item(&lx, depth)? {
+            Atom(a) => {
+                if a.starts_with("?") {
+                    return match self.defs.get(a) {
+                        Some(id) => Ok(id)
+                        None => Err("invalid ground variable or undefined abbreviation " + a)
+                    }
+                }
+                let head = self.th.constructor(a)?
+                let base = self.stack.len()
+                self.stack.push(head)
+                self.make(base)
+            }
+            _ => {
+                let head = self.th.constructor(atom(&lx, depth + 1)?)?
+                self.args(&lx, head, depth + 1)
+            }
+        }
+    }
+
+    fn judgment(inout self, comptime R: io.BufRead, inout lx: lex.Lexer(R), depth: i64) -> Result(u32, String) {
+        open(&lx, depth)?
+        let head = self.th.predicate(atom(&lx, depth + 1)?)?
+        self.args(&lx, head, depth + 1)
+    }
+
+    fn step(inout self, comptime R: io.BufRead, inout lx: lex.Lexer(R), inout steps: Vec(u32)) -> Result((), String) {
+        let id = index(&lx, 1)?
+        if id != steps.len() { return Err("expected next step index " + steps.len().to_string()) }
+        let th = self.th
+        let rule_name = atom(&lx, 1)?.to_string()
+        if !th.rules.contains(rule_name) { return Err("unknown rule " + rule_name.as_str()) }
+        let rule = th.rules[rule_name]
+        open(&lx, 1)?
+        var refs = Vec(i64).new()
+        while !lx.at_close()? { refs.push(index(&lx, 2)?) }
+        lx.token()?
+        if refs.len() != rule.premises.len() { return Err("wrong number of premises") }
+        var bindings = Vec(u32).filled(rule.vars.len(), NONE)
+        var stated: Option(u32) = None
+        while !lx.at_close()? {
+            open(&lx, 1)?
+            let tag = atom(&lx, 2)?.to_string()
+            if tag.as_str().starts_with("?") {
+                var found = -1
+                for i in 0..rule.vars.len() { if rule.vars[i].0 == tag { found = i; break } }
+                if found < 0 { return Err("unknown variable " + tag.as_str()) }
+                let value = self.term(&lx, 2)?
+                end(&lx)?
+                if bindings[found] != NONE || self.sort(value) != rule.vars[found].1 { return Err("invalid binding") }
+                bindings[found] = value
+            } else {
+                let head = th.predicate(tag.as_str())?
+                let judgment = self.args(&lx, head, 2)?
+                if stated.is_some() { return Err("more than one conclusion") }
+                stated = Some(judgment)
+            }
+        }
+        match stated {
+            Some(j) => if !matches(self.arena, rule.conclusion, j, &bindings) { return Err("conclusion mismatch") }
+            None => {}
+        }
+        for i in 0..refs.len() {
+            let n = refs[i]
+            if n >= steps.len() { return Err("premise is not an earlier step") }
+            if !matches(self.arena, rule.premises[i], steps[n], &bindings) { return Err("premise mismatch") }
+        }
+        let conclusion = match stated {
+            Some(j) => j
+            None => self.build(rule.conclusion, bindings.as_slice())?
+        }
+        steps.push(conclusion)
+        Ok(())
+    }
+
+    fn build(inout self, pattern: Pattern, bindings: [u32]) -> Result(u32, String) {
+        match pattern {
+            Var(v) => {
+                if bindings[v] == NONE { return Err("unbound conclusion variable") }
+                Ok(bindings[v])
+            }
+            App(head, args) => {
+                let base = self.stack.len()
+                self.stack.push(head)
+                for a in args {
+                    let id = self.build(a, bindings)?
+                    self.stack.push(id)
+                }
+                self.make(base)
+            }
+        }
+    }
+}
+
+fn matches(arena: Arena, pattern: Pattern, id: u32, inout bindings: Vec(u32)) -> bool {
+    match pattern {
+        Var(v) => {
+            if bindings[v] == NONE { bindings[v] = id; return true }
+            bindings[v] == id
+        }
+        App(head, args) => {
+            let node = arena.node(id)
+            if node[0] != head || node.len != args.len() + 1 { return false }
+            for i in 0..args.len() {
+                if !matches(arena, args[i], node[i + 1], &bindings) { return false }
+            }
+            true
+        }
+    }
+}
+
+fn item(comptime R: io.BufRead, inout lx: lex.Lexer(R), depth: i64) -> Result(lex.Token, String) {
+    if depth > sexp.MAX_DEPTH { return Err("S-expression nesting exceeds 256") }
+    match lx.token()? {
+        None => Err("unexpected end of input")
+        Some(Close) => Err("unexpected closing parenthesis")
+        Some(t) => Ok(t)
+    }
+}
+
+fn open(comptime R: io.BufRead, inout lx: lex.Lexer(R), depth: i64) -> Result((), String) {
+    match item(&lx, depth)? {
+        Open => Ok(())
+        _ => Err("expected a list")
+    }
+}
+
+fn atom(comptime R: io.BufRead, inout lx: lex.Lexer(R), depth: i64) -> Result(str, String) {
+    match item(&lx, depth)? {
+        Atom(a) => Ok(a)
+        _ => Err("expected an atom")
+    }
+}
+
+fn index(comptime R: io.BufRead, inout lx: lex.Lexer(R), depth: i64) -> Result(i64, String) {
+    let s = atom(&lx, depth)?
+    var at = 0
+    if s.len > 0 && s[0] == '+' { at = 1 }
+    if at == s.len { return Err("expected a nonnegative step index") }
+    var n: u64 = 0
+    while at < s.len {
+        let c = s[at]
+        if c < '0' || c > '9' { return Err("expected a nonnegative step index") }
+        let digit = (c - '0') as u64
+        if n > (0xffffffffffffffff - digit) / 10 { return Err("expected a nonnegative step index") }
+        n = n * 10 + digit
+        at += 1
+    }
+    // Actual step vectors have signed i64 lengths; a larger index cannot
+    // refer to one. Saturate rather than wrapping into a valid small index.
+    Ok(if n > 0x7fffffffffffffff { 0x7fffffffffffffff } else { n as i64 })
+}
+
+fn end(comptime R: io.BufRead, inout lx: lex.Lexer(R)) -> Result((), String) {
+    match lx.token()? {
+        None => Err("unexpected end of input")
+        Some(Close) => Ok(())
+        _ => Err("too many elements in list")
+    }
+}
+
+pub struct Report {
+    pub steps: i64
+    pub goals: i64
+    pub terms: i64
+    pub bytes: u64
+}

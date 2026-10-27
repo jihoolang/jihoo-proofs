@@ -1,0 +1,21 @@
+// Minimal blocker found while porting Horn's Checker<'t>.
+// The old checker retained `input`'s borrow despite the method not storing it.
+// With inferred borrow effects this compiles and prints 1, then 3.
+struct Theory { value: i64 }
+struct Checker { theory: ref Theory }
+
+impl Checker {
+    fn consume(inout self, inout input: Vec(i64)) -> i64 {
+        input.push(self.theory.value)
+        input.len()
+    }
+}
+
+fn main() {
+    let theory = Theory { value: 1 }
+    var checker = Checker { theory }
+    var input = Vec(i64).new()
+    println(checker.consume(&input))
+    input.push(2)
+    println(checker.consume(&input))
+}

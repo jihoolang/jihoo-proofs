@@ -1,0 +1,45 @@
+// Port of Horn's src/sexp.rs; theory syntax is represented as owned trees.
+import std.io
+import lex
+
+pub const MAX_DEPTH: i64 = 256
+
+pub enum Sexp { Atom(String), List(Vec(Sexp)) }
+
+impl Sexp {
+    pub fn atom(self) -> Result(str, String) {
+        match self {
+            Atom(s) => Ok(s.as_str())
+            _ => Err("expected an atom")
+        }
+    }
+
+    pub fn list(self) -> Result([Sexp], String) {
+        match self {
+            List(xs) => Ok(xs.as_slice())
+            _ => Err("expected a list")
+        }
+    }
+}
+
+pub fn parse(input: str) -> Result(Vec(Sexp), String) {
+    var lx = lex.Lexer.new(io.StrReader.new(input))
+    var out = Vec(Sexp).new()
+    while lx.peek()?.is_some() { out.push(read(&lx, 0)?) }
+    Ok(out)
+}
+
+fn read(comptime R: io.BufRead, inout lx: lex.Lexer(R), depth: i64) -> Result(Sexp, String) {
+    if depth > MAX_DEPTH { return Err("S-expression nesting exceeds 256") }
+    match lx.token()? {
+        None => Err("unexpected end of input")
+        Some(Open) => {
+            var xs = Vec(Sexp).new()
+            while !lx.at_close()? { xs.push(read(&lx, depth + 1)?) }
+            lx.token()?
+            Ok(Sexp.List(xs))
+        }
+        Some(Close) => Err("unexpected closing parenthesis")
+        Some(Atom(word)) => Ok(Sexp.Atom(word.to_string()))
+    }
+}

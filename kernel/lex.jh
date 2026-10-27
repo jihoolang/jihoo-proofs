@@ -1,0 +1,88 @@
+// Port of Horn's src/lex.rs. Text borrows the current input line.
+import std.io
+import std.utf8
+
+#[derive(Eq)]
+pub enum Kind { Open, Close, Atom }
+
+pub enum Token { Open, Close, Atom(str) }
+
+pub struct Lexer(R: io.BufRead) {
+    input: R
+    line: String
+    pos: i64
+    ahead: Option(Option((Kind, i64, i64)))
+    count: u64
+}
+
+impl(R: io.BufRead) Lexer(R) {
+    pub fn new(sink input: R) -> Lexer(R) {
+        Lexer(R) { input, line: String.new(), pos: 0, ahead: None, count: 0 }
+    }
+
+    pub fn bytes(self) -> u64 { self.count }
+
+    fn scan(inout self) -> Result(Option((Kind, i64, i64)), String) {
+        loop {
+            let start = self.pos
+            if start == self.line.len() {
+                self.line.clear()
+                self.pos = 0
+                let n = self.input.read_line(&self.line)?
+                if n == 0 { return Ok(None) }
+                self.count += n as u64
+                continue
+            }
+            let decoded = utf8.decode(self.line.as_str(), start)?
+            let c = decoded.0
+            if utf8.is_whitespace(c) {
+                self.pos += decoded.1
+            } else if c == ';' as u32 {
+                self.pos = self.line.len()
+            } else if c == '(' as u32 || c == ')' as u32 {
+                self.pos += 1
+                let kind = if c == '(' as u32 { Kind.Open } else { Kind.Close }
+                return Ok(Some((kind, start, start + 1)))
+            } else {
+                while self.pos < self.line.len() {
+                    let d = utf8.decode(self.line.as_str(), self.pos)?
+                    if utf8.is_whitespace(d.0) || d.0 == '(' as u32 ||
+                        d.0 == ')' as u32 || d.0 == ';' as u32 { break }
+                    self.pos += d.1
+                }
+                return Ok(Some((Kind.Atom, start, self.pos)))
+            }
+        }
+    }
+
+    pub fn peek(inout self) -> Result(Option(Kind), String) {
+        if self.ahead.is_none() { self.ahead = Some(self.scan()?) }
+        match self.ahead {
+            Some(Some(t)) => Ok(Some(t.0))
+            _ => Ok(None)
+        }
+    }
+
+    pub fn at_close(inout self) -> Result(bool, String) {
+        match self.peek()? {
+            Some(Close) => Ok(true)
+            _ => Ok(false)
+        }
+    }
+
+    pub fn token(inout self) -> Result(Option(Token), String) {
+        let token = match self.ahead {
+            Some(t) => t
+            None => self.scan()?
+        }
+        self.ahead = None
+        match token {
+            None => Ok(None)
+            Some(t) => match t.0 {
+                Open => Ok(Some(Token.Open))
+                Close => Ok(Some(Token.Close))
+                Atom => Ok(Some(Token.Atom(self.line.as_str()[t.1..t.2])))
+            }
+        }
+    }
+}
