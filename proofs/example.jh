@@ -1,0 +1,20 @@
+// All checking runs in the existing MIR compile-time interpreter.
+import nat
+
+fn verify() -> String {
+    let p = nat.development()
+    match p.check() {
+        Ok(r) => "checked at compile time: " + r.goals.to_string() +
+            " theorems, " + r.open_goals.to_string() + " general statements, " +
+            r.inductions.to_string() + " induction, " + r.steps.to_string() + " proof steps"
+        Err(_) => trap()
+    }
+}
+
+const CHECKED: str = verify()
+
+fn main() {
+    println(CHECKED)
+    println("add_zero: for every n, add(n, zero) = n")
+    println("twice_zero: for every n, add(add(n, zero), zero) = n")
+}

@@ -9,6 +9,17 @@ jihoo and run both at runtime and during compile-time evaluation. It does
 not introduce contract syntax or connect certificates to jihoo programs.
 That connection is a later design decision.
 
+The separate [proof development experiment](../proofs/README.md) adds a
+restricted schematic checker for general statements, structural induction,
+and derivation reuse at compile time. It leaves this ground checker unchanged
+and adds its own trust obligations; it does not establish program contracts.
+
+The [generated codec experiment](../verified-codec/README.md) connects this
+ground checker to a bounded executable table representation through a small
+trusted adapter. `Theory.from_forms` accepts S-expression trees from
+metaprograms, with the same declaration validation used by `Theory.parse`.
+The ground certificate rules and checks are unchanged.
+
 ## Scope
 
 | jihoo file | upstream source | responsibility |

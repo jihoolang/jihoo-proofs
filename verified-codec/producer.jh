@@ -1,0 +1,48 @@
+// Untrusted example generator and certificate producer.
+import program
+import model
+
+pub struct Reverse {}
+
+impl Reverse {
+    pub fn generate(comptime T: type) -> program.Plan(variant_count(T)) {
+        let n = variant_count(T)
+        var p = program.Plan(variant_count(T)) { encode: [0; variant_count(T)], decode: [0; variant_count(T)] }
+        for i in 0..n {
+            p.encode[i] = n - 1 - i
+            p.decode[i] = n - 1 - i
+        }
+        p
+    }
+
+    pub fn certificate(comptime T: type, ordinal: i64) -> String {
+        let p = Reverse.generate(T)
+        certificate(p, ordinal)
+    }
+}
+
+struct Derivation { text: String, last: i64, next: i64 }
+
+fn lookup(xs: [i64], index: i64, start: i64) -> Derivation {
+    if index < 0 || index >= xs.len { return Derivation { text: String.new(), last: -1, next: start } }
+    let value = model.number(xs[index])
+    var text = "(step " + start.to_string() + " h () (?x " + value.as_str() + ") (?xs " + model.list(xs[index + 1..]) + "))\n"
+    var last = start
+    var suffix = index
+    while suffix > 0 {
+        suffix -= 1
+        let next = last + 1
+        text += "(step " + next.to_string() + " t (" + last.to_string() + ") (?y " + model.number(xs[suffix]) + "))\n"
+        last = next
+    }
+    Derivation { text, last, next: last + 1 }
+}
+
+pub fn certificate(comptime N: i64, p: program.Plan(N), ordinal: i64) -> String {
+    if !model.well_formed(p) || ordinal < 0 || ordinal >= N { return String.new() }
+    let forward = lookup(p.encode, ordinal, 0)
+    let backward = lookup(p.decode, p.encode[ordinal], forward.next)
+    forward.text.as_str() + backward.text.as_str() +
+        "(step " + backward.next.to_string() + " r (" + forward.last.to_string() + " " + backward.last.to_string() + "))\n" +
+        "(result roundtrip " + backward.next.to_string() + ")\n"
+}

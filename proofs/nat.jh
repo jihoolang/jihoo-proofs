@@ -1,0 +1,33 @@
+// A proof-domain definition, not a specification of jihoo machine integers.
+import proofs
+
+pub fn theory() -> String {
+    "(sort Nat)\n" +
+        "(ctor z () Nat) (ctor s (Nat) Nat)\n" +
+        "(pred add (Nat Nat Nat)) (pred twice (Nat Nat))\n" +
+        "(rule add.z () (add z ?n ?n))\n" +
+        "(rule add.s ((add ?m ?n ?r)) (add (s ?m) ?n (s ?r)))\n" +
+        "(rule twice.body ((add ?n z ?r) (add ?r z ?out)) (twice ?n ?out))\n"
+}
+
+pub fn development() -> proofs.Development {
+    let source = theory()
+    var p = proofs.Development.new(source.as_str())
+    p.variable("n", "Nat")
+    p.variable("k", "Nat")
+
+    // Prove add(n, z) = n by induction on n.
+    let base = p.step("add.z", [], "(add z z z)")
+    let ih = p.hypothesis("(add k z k)")
+    let successor = p.step("add.s", [ih], "(add (s k) z (s k))")
+    let add_zero = p.induction("n", "(add n z n)", [
+        proofs.case(base, []), proofs.case(successor, ["k"])
+    ])
+    p.theorem("add_zero", "(add n z n)", add_zero)
+
+    // Reuse the derivation twice; the whole development is checked at the end.
+    let twice_zero = p.step("twice.body", [add_zero, add_zero], "(twice n n)")
+    p.theorem("twice_zero", "(twice n n)", twice_zero)
+
+    p
+}

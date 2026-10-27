@@ -31,6 +31,12 @@ fn name(x: sexp.Sexp) -> Result(str, String) {
 
 impl Theory {
     pub fn parse(source: str) -> Result(Theory, String) {
+        let forms = sexp.parse(source)?
+        Theory.from_forms(forms.as_slice())
+    }
+
+    // Metaprograms may supply syntax trees; all schema validation stays here.
+    pub fn from_forms(forms: [sexp.Sexp]) -> Result(Theory, String) {
         var th = Theory {
             sorts: Map(String, u32).new()
             constructors: Map(String, u32).new()
@@ -38,7 +44,6 @@ impl Theory {
             symbols: Vec(Symbol).new()
             rules: Map(String, Rule).new()
         }
-        let forms = sexp.parse(source)?
         for form in forms {
             let xs = form.list()?
             if xs.len == 0 { return Err("empty declaration") }

@@ -1,0 +1,34 @@
+// Trusted semantics of the small table program, independent of its producer.
+import program
+
+// at(index, list, value) is deterministic positional lookup. rt states that
+// looking up an enum ordinal, then the resulting wire tag, returns the ordinal.
+pub const THEORY = "(sort N) (sort L) (ctor z () N) (ctor s (N) N) (ctor e () L) (ctor c (N L) L) (pred at (N L N)) (pred rt (N L L)) (rule h () (at z (c ?x ?xs) ?x)) (rule t ((at ?i ?xs ?x)) (at (s ?i) (c ?y ?xs) ?x)) (rule r ((at ?i ?a ?tag) (at ?tag ?b ?i)) (rt ?i ?a ?b))"
+
+pub fn number(n: i64) -> String {
+    var out = String.new()
+    for _ in 0..n { out += "(s " }
+    out += "z"
+    for _ in 0..n { out += ")" }
+    out
+}
+
+pub fn list(xs: [i64]) -> String {
+    var out = String.new()
+    for x in xs { out += "(c " + number(x) + " " }
+    out += "e"
+    for _ in xs { out += ")" }
+    out
+}
+
+pub fn goal(comptime N: i64, p: program.Plan(N), ordinal: i64) -> String {
+    "(goal roundtrip (rt " + number(ordinal) + " " + list(p.encode) + " " + list(p.decode) + "))"
+}
+
+pub fn well_formed(comptime N: i64, p: program.Plan(N)) -> bool {
+    // This is a representation check, not a round-trip check. In particular,
+    // duplicated or mutually inconsistent tables reach the Horn checker.
+    for x in p.encode { if x < 0 || x >= N { return false } }
+    for x in p.decode { if x < 0 || x >= N { return false } }
+    true
+}

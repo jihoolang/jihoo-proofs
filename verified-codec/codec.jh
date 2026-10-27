@@ -1,0 +1,48 @@
+// Trusted adapter from the checked table semantics to actual jihoo enums.
+// Its private plan is the exact compile-time plan included in every goal.
+import program
+import model
+import kernel
+import syntax
+
+pub struct Codec(T: type) { plan: program.Plan(variant_count(T)) }
+
+// Each variant is a separate bounded compile-time obligation. G controls
+// candidate data and proof text; the adapter controls the theory and goal.
+fn verify(comptime T: type, comptime G: type, comptime ordinal: i64) -> i64 {
+    let p = G.generate(T)
+    if !model.well_formed(p) { trap() }
+    let goal = model.goal(p, ordinal)
+    // Stage production separately: its budget cannot consume the checker's.
+    let proof = comptime G.certificate(T, ordinal)
+    let forms = syntax.parse(model.THEORY).unwrap()
+    let theory = kernel.Theory.from_forms(forms.as_slice()).unwrap()
+    match theory.check(goal.as_str(), proof) {
+        Ok(r) => r.steps
+        Err(_) => trap()
+    }
+}
+
+pub fn build(comptime T: type, comptime G: type) -> Codec(T) {
+    // Payloads would require a richer executable representation and semantics.
+    inline for i in 0..variant_count(T) {
+        inline if variant_field_count(T, i) != 0 { comptime trap() }
+        let checked = comptime verify(T, G, i)
+    }
+    // Freeze the executable plan even if build is called from runtime code.
+    let p = comptime G.generate(T)
+    Codec(T) { plan: p }
+}
+
+impl(T: type) Codec(T) {
+    pub fn encode(self, value: T) -> i64 { self.plan.encode[variant_of(value)] }
+
+    pub fn decode(self, tag: i64) -> Option(T) {
+        if tag < 0 || tag >= variant_count(T) { return None }
+        let ordinal = self.plan.decode[tag]
+        inline for i in 0..variant_count(T) {
+            if ordinal == i { return Some(make_variant(T, i, fn(j) { trap() })) }
+        }
+        None
+    }
+}

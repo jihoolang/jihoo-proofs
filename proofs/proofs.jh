@@ -1,0 +1,85 @@
+// Certificate construction is untrusted; schematic.check validates the whole
+// development against its original theory and caller-selected statements.
+import schematic
+
+pub struct Development {
+    theory_source: String
+    declarations: String
+    goals_source: String
+    proof_source: String
+    next: i64
+}
+
+impl Development {
+    pub fn new(theory: str) -> Development {
+        Development {
+            theory_source: theory.to_string(), declarations: String.new(),
+            goals_source: String.new(), proof_source: String.new(), next: 0
+        }
+    }
+
+    pub fn variable(inout self, name: str, sort: str) {
+        self.declarations += "(var " + name + " " + sort + ")\n"
+    }
+
+    pub fn step(inout self, rule: str, premises: [i64], conclusion: str) -> i64 {
+        var refs = Vec(String).new()
+        for p in premises { refs.push(p.to_string()) }
+        self.step_refs(rule, refs.as_slice(), conclusion)
+    }
+
+    pub fn step_refs(inout self, rule: str, premises: [String], conclusion: str) -> i64 {
+        let n = self.next
+        self.next += 1
+        self.proof_source += "(step " + n.to_string() + " " + rule + " ("
+        for p in premises { self.proof_source += p.as_str() + " " }
+        self.proof_source += ") " + conclusion + ")\n"
+        n
+    }
+
+    pub fn hypothesis(inout self, judgment: str) -> i64 {
+        let n = self.next
+        self.next += 1
+        self.proof_source += "(hyp " + n.to_string() + " " + judgment + ")\n"
+        n
+    }
+
+    pub fn induction(inout self, variable: str, judgment: str, cases: [String]) -> i64 {
+        let n = self.next
+        self.next += 1
+        self.proof_source += "(induct " + n.to_string() + " " + variable + " " + judgment + " ("
+        for c in cases { self.proof_source += c.as_str() + " " }
+        self.proof_source += "))\n"
+        n
+    }
+
+    pub fn theorem(inout self, name: str, statement: str, step: i64) {
+        self.theorem_ref(name, statement, step.to_string().as_str())
+    }
+
+    pub fn theorem_ref(inout self, name: str, statement: str, reference: str) {
+        self.goals_source += "(goal " + name + " " + statement + ")\n"
+        self.proof_source += "(result " + name + " " + reference + ")\n"
+    }
+
+    pub fn theory(self) -> str { self.theory_source.as_str() }
+    pub fn goals(self) -> String { self.declarations.as_str() + self.goals_source.as_str() }
+    pub fn certificate(self) -> str { self.proof_source.as_str() }
+
+    pub fn check(self) -> Result(schematic.Report, String) {
+        let goals = self.goals()
+        schematic.check(self.theory(), goals.as_str(), self.certificate())
+    }
+}
+
+pub fn case(step: i64, variables: [str]) -> String {
+    var out = "(" + step.to_string()
+    for v in variables { out += " " + v }
+    out + ")"
+}
+
+pub fn instance(step: i64, bindings: [(str, str)]) -> String {
+    var out = "(" + step.to_string()
+    for b in bindings { out += " (" + b.0 + " " + b.1 + ")" }
+    out + ")"
+}

@@ -1,0 +1,22 @@
+import std.env
+import codec
+import producer
+
+#[derive(Eq, Show)]
+enum Signal { Red, Amber, Green }
+
+const CODEC = codec.build(Signal, producer.Reverse)
+
+fn main() {
+    // The tag comes from runtime input. No proof checker runs here.
+    let args = env.args()
+    let tag = if args.len() > 1 { args[1].parse_int().unwrap() } else { 0 }
+    println("Red encodes to " + CODEC.encode(Signal.Red).to_string())
+    match CODEC.decode(tag) {
+        Some(value) => {
+            println(value)
+            println("round trip: " + (CODEC.decode(CODEC.encode(value)).unwrap() == value).to_string())
+        }
+        None => println("invalid tag")
+    }
+}

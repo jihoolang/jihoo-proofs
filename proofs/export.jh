@@ -1,0 +1,23 @@
+// Export the same development for Horn's independent Rust checker.
+import std.env
+import std.fs
+import std.sys
+import nat
+
+fn run() -> Result((), String) {
+    let args = env.args()
+    if args.len() != 2 { return Err("usage: export OUTPUT_DIRECTORY") }
+    let p = nat.development()
+    p.check()?
+    fs.write_file((args[1] + "/theory.horn").as_str(), p.theory())?
+    fs.write_file((args[1] + "/goals").as_str(), p.goals().as_str())?
+    fs.write_file((args[1] + "/proof").as_str(), p.certificate())?
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => println("exported checked development")
+        Err(e) => { eprintln(e); sys.exit(1) }
+    }
+}

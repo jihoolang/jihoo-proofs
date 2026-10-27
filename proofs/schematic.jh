@@ -1,0 +1,502 @@
+// A tree-based port of Horn's schematic fragment with unconditional goals.
+// The ground kernel remains unchanged. This checker additionally trusts the
+// structural-induction rule described in Horn's agda/Schematic.agda.
+import sexp
+import syntax
+
+const PROP: i64 = -1
+
+#[derive(Clone, Eq)]
+enum Term { Var(i64), App(i64, Vec(Term)) }
+
+struct Symbol { inputs: Vec(i64), output: i64 }
+struct Rule { vars: Vec((String, i64)), premises: Vec(Term), conclusion: Term }
+struct Spec {
+    sorts: Map(String, i64)
+    constructors: Map(String, i64)
+    predicates: Map(String, i64)
+    symbols: Vec(Symbol)
+    by_sort: Vec(Vec(i64))
+    rules: Map(String, Rule)
+}
+
+impl Spec {
+    fn parse(source: str) -> Result(Spec, String) {
+        var s = Spec {
+            sorts: Map(String, i64).new(), constructors: Map(String, i64).new(),
+            predicates: Map(String, i64).new(), symbols: Vec(Symbol).new(),
+            by_sort: Vec(Vec(i64)).new(), rules: Map(String, Rule).new()
+        }
+        for form in syntax.parse(source)? {
+            let xs = form.list()?
+            if xs.len == 0 { return Err("empty declaration") }
+            let tag = xs[0].atom()?
+            if tag == "sort" && xs.len == 2 {
+                let name = declaration_name(xs[1])?
+                if s.sorts.insert(name.to_string(), s.by_sort.len()).is_some() { return Err("duplicate sort") }
+                s.by_sort.push(Vec(i64).new())
+            } else if (tag == "ctor" && xs.len == 4) || (tag == "pred" && xs.len == 3) {
+                let name = declaration_name(xs[1])?
+                var inputs = Vec(i64).new()
+                for a in xs[2].list()? { inputs.push(s.named_sort(a)?) }
+                let id = s.symbols.len()
+                var output = PROP
+                if tag == "ctor" {
+                    output = s.named_sort(xs[3])?
+                    s.by_sort[output].push(id)
+                    if s.constructors.insert(name.to_string(), id).is_some() { return Err("duplicate constructor") }
+                } else {
+                    if s.predicates.insert(name.to_string(), id).is_some() { return Err("duplicate predicate") }
+                }
+                s.symbols.push(Symbol { inputs, output })
+            } else if tag == "rule" && xs.len == 4 {
+                let name = declaration_name(xs[1])?
+                var vars = Vec((String, i64)).new()
+                var premises = Vec(Term).new()
+                for p in xs[2].list()? { premises.push(s.pattern(p, PROP, &vars)?) }
+                let conclusion = s.pattern(xs[3], PROP, &vars)?
+                if s.rules.insert(name.to_string(), Rule { vars, premises, conclusion }).is_some() { return Err("duplicate rule") }
+            } else { return Err("invalid theory declaration") }
+        }
+        Ok(s)
+    }
+
+    fn named_sort(self, x: sexp.Sexp) -> Result(i64, String) {
+        let name = declaration_name(x)?
+        match self.sorts.get(name.to_string()) {
+            Some(s) => Ok(s)
+            None => Err("unknown sort " + name)
+        }
+    }
+
+    fn pattern(self, x: sexp.Sexp, sort: i64, inout vars: Vec((String, i64))) -> Result(Term, String) {
+        if sort != PROP {
+            match x {
+                Atom(a) => if a.as_str().starts_with("?") {
+                    if a.len() == 1 { return Err("invalid rule variable") }
+                    for i in 0..vars.len() {
+                        if vars[i].0 == a {
+                            if vars[i].1 != sort { return Err("rule variable has conflicting sorts") }
+                            return Ok(Term.Var(i))
+                        }
+                    }
+                    let id = vars.len()
+                    vars.push((a.clone(), sort))
+                    return Ok(Term.Var(id))
+                }
+                _ => {}
+            }
+        }
+        let head = match x {
+            Atom(a) => {
+                if sort == PROP { return Err("expected a judgment") }
+                a.as_str()
+            }
+            List(xs) => {
+                if xs.is_empty() { return Err("empty pattern") }
+                if sort != PROP && xs.len() == 1 { return Err("nullary constructors must be atoms") }
+                xs[0].atom()?
+            }
+        }
+        let key = head.to_string()
+        let found = if sort == PROP { self.predicates.get(key) } else { self.constructors.get(key) }
+        let id = match found { Some(h) => h, None => return Err("unknown symbol " + head) }
+        let sig = self.symbols[id]
+        if sig.output != sort { return Err("wrong pattern sort") }
+        var args = Vec(Term).new()
+        match x {
+            List(xs) => {
+                if xs.len() != sig.inputs.len() + 1 { return Err("wrong pattern arity") }
+                for i in 1..xs.len() { args.push(self.pattern(xs[i], sig.inputs[i - 1], &vars)?) }
+            }
+            _ => if sig.inputs.len() != 0 { return Err("constructor needs arguments") }
+        }
+        Ok(Term.App(id, args))
+    }
+}
+
+fn declaration_name(x: sexp.Sexp) -> Result(str, String) {
+    let name = x.atom()?
+    if name.starts_with("?") { return Err("declaration names cannot be variables") }
+    Ok(name)
+}
+
+#[derive(Clone)]
+struct Fact { judgment: Term, hyps: Vec(i64), is_hyp: bool }
+
+struct Checker {
+    spec: Spec
+    names: Map(String, i64)
+    sorts: Vec(i64)
+    defs: Map(String, Term)
+    facts: Vec(Fact)
+}
+
+impl Checker {
+    fn declare(inout self, name: str, sort: str) -> Result((), String) {
+        if name.len == 0 || name.starts_with("?") || self.names.contains(name.to_string()) ||
+            self.spec.constructors.contains(name.to_string()) || self.spec.predicates.contains(name.to_string()) {
+            return Err("invalid or duplicate variable " + name)
+        }
+        if !self.spec.sorts.contains(sort.to_string()) { return Err("unknown sort " + sort) }
+        self.names.insert(name.to_string(), self.sorts.len())
+        self.sorts.push(self.spec.sorts[sort.to_string()])
+        Ok(())
+    }
+
+    fn variable(self, x: sexp.Sexp) -> Result(i64, String) {
+        let name = x.atom()?
+        match self.names.get(name.to_string()) {
+            Some(v) => Ok(v)
+            None => Err("unknown variable " + name)
+        }
+    }
+
+    fn sort(self, t: Term) -> i64 {
+        match t { Var(v) => self.sorts[v], App(h, _) => self.spec.symbols[h].output }
+    }
+
+    fn term(self, x: sexp.Sexp) -> Result(Term, String) {
+        match x {
+            Atom(a) => {
+                if a.as_str().starts_with("?") {
+                    return match self.defs.get(a) {
+                        Some(t) => Ok(t.clone())
+                        None => Err("undefined abbreviation " + a.as_str())
+                    }
+                }
+                match self.names.get(a) {
+                    Some(v) => return Ok(Term.Var(v))
+                    None => {}
+                }
+                match self.spec.constructors.get(a) {
+                    Some(h) => {
+                        if self.spec.symbols[h].inputs.len() != 0 { return Err("constructor needs arguments") }
+                        Ok(Term.App(h, Vec(Term).new()))
+                    }
+                    None => Err("unknown constructor " + a.as_str())
+                }
+            }
+            List(xs) => {
+                if xs.len() < 2 { return Err("expected a constructor with arguments") }
+                let name = xs[0].atom()?
+                if !self.spec.constructors.contains(name.to_string()) { return Err("unknown constructor " + name) }
+                self.application(self.spec.constructors[name.to_string()], xs.as_slice()[1..])
+            }
+        }
+    }
+
+    fn application(self, h: i64, xs: [sexp.Sexp]) -> Result(Term, String) {
+        let inputs = self.spec.symbols[h].inputs
+        if xs.len != inputs.len() { return Err("wrong arity") }
+        var args = Vec(Term).new()
+        for i in 0..xs.len {
+            let t = self.term(xs[i])?
+            if self.sort(t) != inputs[i] { return Err("wrong sort") }
+            args.push(t)
+        }
+        Ok(Term.App(h, args))
+    }
+
+    fn judgment(self, x: sexp.Sexp) -> Result(Term, String) {
+        let xs = x.list()?
+        if xs.len == 0 { return Err("empty judgment") }
+        let name = xs[0].atom()?
+        if !self.spec.predicates.contains(name.to_string()) { return Err("unknown predicate " + name) }
+        self.application(self.spec.predicates[name.to_string()], xs[1..])
+    }
+
+    fn reference(self, x: sexp.Sexp) -> Result(Fact, String) {
+        match x {
+            Atom(_) => {
+                let n = index(x)?
+                if n >= self.facts.len() { return Err("reference to a later step") }
+                Ok(self.facts[n].clone())
+            }
+            List(xs) => {
+                if xs.len() == 0 { return Err("empty reference") }
+                let n = index(xs[0])?
+                if n >= self.facts.len() { return Err("reference to a later step") }
+                let f = self.facts[n]
+                if !f.hyps.is_empty() { return Err("cannot instantiate a step with hypotheses") }
+                var bindings = Vec((i64, Term)).new()
+                for b in xs.as_slice()[1..] {
+                    let ys = b.list()?
+                    if ys.len != 2 { return Err("expected (VAR TERM)") }
+                    let v = self.variable(ys[0])?
+                    for pair in bindings { if pair.0 == v { return Err("variable substituted twice") } }
+                    let t = self.term(ys[1])?
+                    if self.sort(t) != self.sorts[v] { return Err("wrong substitution sort") }
+                    bindings.push((v, t))
+                }
+                Ok(Fact { judgment: substitute(f.judgment, bindings.as_slice()), hyps: Vec(i64).new(), is_hyp: false })
+            }
+        }
+    }
+
+    fn step(inout self, xs: [sexp.Sexp]) -> Result(i64, String) {
+        let rule_name = xs[2].atom()?
+        if !self.spec.rules.contains(rule_name.to_string()) { return Err("unknown rule " + rule_name) }
+        let rule_key = rule_name.to_string()
+        let rule = self.spec.rules[rule_key]
+        let refs = xs[3].list()?
+        if refs.len != rule.premises.len() { return Err("wrong number of premises") }
+        var premises = Vec(Term).new()
+        var hyps = Vec(i64).new()
+        var instances = 0
+        for r in refs {
+            if is_list(r) { instances += 1 }
+            let f = self.reference(r)?
+            for h in f.hyps { insert(&hyps, h) }
+            premises.push(f.judgment.clone())
+        }
+        var bindings = Vec(Option(Term)).filled(rule.vars.len(), None)
+        var explicit = Vec(Term).new()
+        var stated: Option(Term) = None
+        for item in xs[4..] {
+            let ys = item.list()?
+            if ys.len == 0 { return Err("empty step item") }
+            let tag = ys[0].atom()?
+            if tag.starts_with("?") && ys.len == 2 {
+                var v = -1
+                for i in 0..rule.vars.len() { if rule.vars[i].0 == tag { v = i } }
+                if v < 0 { return Err("unknown rule variable") }
+                if bindings[v].is_some() { return Err("duplicate binding") }
+                let t = self.term(ys[1])?
+                if self.sort(t) != rule.vars[v].1 { return Err("wrong binding sort") }
+                explicit.push(t.clone())
+                bindings[v] = Some(t)
+            } else {
+                if stated.is_some() { return Err("more than one conclusion") }
+                stated = Some(self.judgment(item)?)
+            }
+        }
+        let conclusion = stated
+        match conclusion {
+            Some(j) => if !matches(rule.conclusion, j, &bindings) { return Err("conclusion mismatch") }
+            None => {}
+        }
+        for i in 0..premises.len() {
+            if !matches(rule.premises[i], premises[i], &bindings) { return Err("premise mismatch") }
+        }
+        let judgment = match conclusion { Some(j) => j.clone(), None => build(rule.conclusion, bindings.as_slice())? }
+        // Empty sorts make this check necessary: every premise/binding
+        // variable must survive in the conclusion or its assumptions.
+        var allowed = Vec(i64).new()
+        variables(judgment, &allowed)
+        for h in hyps { variables(self.facts[h].judgment, &allowed) }
+        for t in premises { if !allowed_variables(t, allowed.as_slice()) { return Err("premise variable absent from conclusion and hypotheses") } }
+        for t in explicit { if !allowed_variables(t, allowed.as_slice()) { return Err("binding variable absent from conclusion and hypotheses") } }
+        self.facts.push(Fact { judgment, hyps, is_hyp: false })
+        Ok(instances)
+    }
+
+    fn induct(inout self, xs: [sexp.Sexp]) -> Result((), String) {
+        let x = self.variable(xs[2])?
+        let judgment = self.judgment(xs[3])?
+        var motive_vars = Vec(i64).new()
+        variables(judgment, &motive_vars)
+        if !contains(motive_vars.as_slice(), x) { return Err("induction variable must occur in the judgment") }
+        let sort = self.sorts[x]
+        let ctors = self.spec.by_sort[sort]
+        let cases = xs[4].list()?
+        if cases.len != ctors.len() { return Err("one case is required per constructor, in declaration order") }
+        for i in 0..ctors.len() {
+            let ys = cases[i].list()?
+            let inputs = self.spec.symbols[ctors[i]].inputs
+            if ys.len != inputs.len() + 1 { return Err("case variables do not match the constructor") }
+            let m = index(ys[0])?
+            if m >= self.facts.len() { return Err("case refers to a later step") }
+            var fresh = Vec(i64).new()
+            var args = Vec(Term).new()
+            var ihs = Vec(Term).new()
+            for k in 0..inputs.len() {
+                let v = self.variable(ys[k + 1])?
+                if self.sorts[v] != inputs[k] || contains(motive_vars.as_slice(), v) || contains(fresh.as_slice(), v) {
+                    return Err("case variables must be fresh, distinct, and correctly sorted")
+                }
+                fresh.push(v)
+                args.push(Term.Var(v))
+                if inputs[k] == sort { ihs.push(substitute(judgment, [(x, Term.Var(v))])) }
+            }
+            let want = substitute(judgment, [(x, Term.App(ctors[i], args))])
+            let fact = self.facts[m]
+            if fact.judgment != want { return Err("case proves the wrong judgment") }
+            for h in fact.hyps {
+                let hyp = self.facts[h]
+                var ok = false
+                for ih in ihs { if hyp.is_hyp && hyp.judgment == ih { ok = true } }
+                if !ok { return Err("case uses a hypothesis that is not an induction hypothesis") }
+            }
+        }
+        self.facts.push(Fact { judgment, hyps: Vec(i64).new(), is_hyp: false })
+        Ok(())
+    }
+}
+
+fn contains(xs: [i64], x: i64) -> bool {
+    for y in xs { if x == y { return true } }
+    false
+}
+
+fn insert(inout xs: Vec(i64), x: i64) {
+    if !contains(xs.as_slice(), x) { xs.push(x) }
+}
+
+fn variables(t: Term, inout out: Vec(i64)) {
+    match t {
+        Var(v) => insert(&out, v)
+        App(_, args) => for a in args { variables(a, &out) }
+    }
+}
+
+fn allowed_variables(t: Term, allowed: [i64]) -> bool {
+    match t {
+        Var(v) => contains(allowed, v)
+        App(_, args) => {
+            for a in args { if !allowed_variables(a, allowed) { return false } }
+            true
+        }
+    }
+}
+
+// Simultaneous, one-level substitution, including variable renaming.
+fn substitute(t: Term, bindings: [(i64, Term)]) -> Term {
+    match t {
+        Var(v) => {
+            for b in bindings { if b.0 == v { return b.1.clone() } }
+            Term.Var(v)
+        }
+        App(h, args) => {
+            var out = Vec(Term).new()
+            for a in args { out.push(substitute(a, bindings)) }
+            Term.App(h, out)
+        }
+    }
+}
+
+fn matches(p: Term, t: Term, inout bindings: Vec(Option(Term))) -> bool {
+    match p {
+        Var(v) => {
+            match bindings[v] {
+                Some(b) => return b == t
+                None => {}
+            }
+            bindings[v] = Some(t.clone())
+            true
+        }
+        App(h, args) => match t {
+            App(k, ts) => {
+                if h != k || args.len() != ts.len() { return false }
+                for i in 0..args.len() { if !matches(args[i], ts[i], &bindings) { return false } }
+                true
+            }
+            _ => false
+        }
+    }
+}
+
+fn build(p: Term, bindings: [Option(Term)]) -> Result(Term, String) {
+    match p {
+        Var(v) => match bindings[v] {
+            Some(t) => Ok(t.clone())
+            None => Err("unbound conclusion variable")
+        }
+        App(h, args) => {
+            var out = Vec(Term).new()
+            for a in args { out.push(build(a, bindings)?) }
+            Ok(Term.App(h, out))
+        }
+    }
+}
+
+fn index(x: sexp.Sexp) -> Result(i64, String) {
+    let s = x.atom()?
+    var at = 0
+    if s.len > 0 && s[0] == '+' { at = 1 }
+    if at == s.len { return Err("expected a nonnegative step index") }
+    var n: i64 = 0
+    while at < s.len {
+        let c = s[at]
+        if c < '0' || c > '9' { return Err("expected a nonnegative step index") }
+        let digit = (c - '0') as i64
+        if n > (0x7fffffffffffffff - digit) / 10 { return Err("step index out of range") }
+        n = n * 10 + digit
+        at += 1
+    }
+    Ok(n)
+}
+
+fn is_list(x: sexp.Sexp) -> bool { match x { List(_) => true, _ => false } }
+
+pub struct Report {
+    pub steps: i64
+    pub goals: i64
+    pub open_goals: i64
+    pub hypotheses: i64
+    pub inductions: i64
+    pub instances: i64
+}
+
+pub fn check(theory: str, goals: str, proof: str) -> Result(Report, String) {
+    var ck = Checker {
+        spec: Spec.parse(theory)?, names: Map(String, i64).new(), sorts: Vec(i64).new(),
+        defs: Map(String, Term).new(), facts: Vec(Fact).new()
+    }
+    var expected = Map(String, Term).new()
+    var report = Report { steps: 0, goals: 0, open_goals: 0, hypotheses: 0, inductions: 0, instances: 0 }
+    for form in syntax.parse(goals)? {
+        let xs = form.list()?
+        if xs.len == 3 && xs[0].atom()? == "var" {
+            ck.declare(xs[1].atom()?, xs[2].atom()?)?
+        } else if xs.len == 3 && xs[0].atom()? == "goal" {
+            let j = ck.judgment(xs[2])?
+            var vs = Vec(i64).new()
+            variables(j, &vs)
+            if !vs.is_empty() { report.open_goals += 1 }
+            if expected.insert(xs[1].atom()?.to_string(), j).is_some() { return Err("duplicate goal") }
+        } else { return Err("invalid goal form") }
+    }
+    if expected.is_empty() { return Err("no expected goals") }
+    report.goals = expected.len()
+    for form in syntax.parse(proof)? {
+        let xs = form.list()?
+        if xs.len == 0 { return Err("empty proof form") }
+        let tag = xs[0].atom()?
+        if tag == "step" || tag == "hyp" || tag == "induct" {
+            if xs.len < 2 || index(xs[1])? != ck.facts.len() { return Err("expected the next step index") }
+        }
+        if tag == "var" && xs.len == 3 {
+            ck.declare(xs[1].atom()?, xs[2].atom()?)?
+        } else if tag == "def" && xs.len == 3 {
+            let name = xs[1].atom()?
+            if !name.starts_with("?") || name.len == 1 { return Err("invalid abbreviation name") }
+            let t = ck.term(xs[2])?
+            if ck.defs.insert(name.to_string(), t).is_some() { return Err("duplicate abbreviation") }
+        } else if tag == "step" && xs.len >= 4 {
+            report.instances += ck.step(xs)?
+        } else if tag == "hyp" && xs.len == 3 {
+            let j = ck.judgment(xs[2])?
+            let n = ck.facts.len()
+            var hyps = Vec(i64).new()
+            hyps.push(n)
+            ck.facts.push(Fact { judgment: j, hyps, is_hyp: true })
+            report.hypotheses += 1
+        } else if tag == "induct" && xs.len == 5 {
+            ck.induct(xs)?
+            report.inductions += 1
+        } else if tag == "result" && xs.len == 3 {
+            let name = xs[1].atom()?
+            let goal = match expected.remove(name.to_string()) {
+                Some(j) => j
+                None => return Err("unknown or repeated result " + name)
+            }
+            let f = ck.reference(xs[2])?
+            if !f.hyps.is_empty() { return Err("result depends on hypotheses") }
+            if f.judgment != goal { return Err("result does not match its goal " + name) }
+        } else { return Err("unsupported or invalid proof form " + tag) }
+    }
+    if !expected.is_empty() { return Err("missing results") }
+    report.steps = ck.facts.len()
+    Ok(report)
+}

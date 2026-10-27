@@ -1,0 +1,35 @@
+// Runtime diagnostics/export for a three-variant table program.
+import std.env
+import std.fs
+import std.sys
+import program
+import model
+import producer
+import kernel
+
+fn run() -> Result((), String) {
+    let args = env.args()
+    if args.len() != 9 { return Err("usage: inspect OUTPUT_DIRECTORY ROW E0 E1 E2 D0 D1 D2") }
+    let row = args[2].parse_int().unwrap()
+    var p = program.Plan(3) { encode: [0; 3], decode: [0; 3] }
+    for i in 0..3 {
+        p.encode[i] = args[3 + i].parse_int().unwrap()
+        p.decode[i] = args[6 + i].parse_int().unwrap()
+    }
+    if !model.well_formed(p) || row < 0 || row >= 3 { return Err("invalid representation") }
+    let goal = model.goal(p, row)
+    let proof = producer.certificate(p, row)
+    fs.write_file((args[1] + "/theory.horn").as_str(), model.THEORY)?
+    fs.write_file((args[1] + "/goals").as_str(), goal.as_str())?
+    fs.write_file((args[1] + "/proof").as_str(), proof.as_str())?
+    let th = kernel.Theory.parse(model.THEORY)?
+    th.check(goal.as_str(), proof.as_str())?
+    Ok(())
+}
+
+fn main() {
+    match run() {
+        Ok(_) => println("ACCEPT")
+        Err(e) => { eprintln("REJECT: " + e.as_str()); sys.exit(1) }
+    }
+}

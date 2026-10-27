@@ -1,0 +1,6 @@
+// The complete executable representation: enum ordinal -> wire tag and back.
+// There are no callbacks or independently supplied runtime implementations.
+pub struct Plan(N: i64) {
+    pub encode: [i64; N]
+    pub decode: [i64; N]
+}

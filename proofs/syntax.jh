@@ -1,0 +1,72 @@
+// Whole-string S-expressions for the compile-time experiment. Unlike the
+// streaming file reader, ASCII tokens need no buffered I/O or UTF-8 decoding.
+// Non-ASCII text and comments still use strict Unicode decoding.
+import std.utf8
+import sexp
+
+struct Reader { source: str, at: i64 }
+
+impl Reader {
+    fn skip(inout self) -> Result((), String) {
+        while self.at < self.source.len {
+            let b = self.source[self.at]
+            if b == ' ' || (b >= 9 && b <= 13) {
+                self.at += 1
+            } else if b == ';' {
+                while self.at < self.source.len && self.source[self.at] != '\n' {
+                    if self.source[self.at] < 128 { self.at += 1 }
+                    else { self.at += utf8.decode(self.source, self.at)?.1 }
+                }
+            } else if b >= 128 {
+                let d = utf8.decode(self.source, self.at)?
+                if !utf8.is_whitespace(d.0) { break }
+                self.at += d.1
+            } else { break }
+        }
+        Ok(())
+    }
+
+    fn read(inout self, depth: i64) -> Result(sexp.Sexp, String) {
+        if depth > sexp.MAX_DEPTH { return Err("S-expression nesting exceeds 256") }
+        self.skip()?
+        if self.at == self.source.len { return Err("unexpected end of input") }
+        let b = self.source[self.at]
+        if b == '(' {
+            self.at += 1
+            var xs = Vec(sexp.Sexp).new()
+            loop {
+                self.skip()?
+                if self.at == self.source.len { return Err("unexpected end of input") }
+                if self.source[self.at] == ')' { self.at += 1; break }
+                xs.push(self.read(depth + 1)?)
+            }
+            Ok(sexp.Sexp.List(xs))
+        } else if b == ')' {
+            Err("unexpected closing parenthesis")
+        } else {
+            let start = self.at
+            while self.at < self.source.len {
+                let c = self.source[self.at]
+                if c == '(' || c == ')' || c == ';' || c == ' ' || (c >= 9 && c <= 13) { break }
+                if c < 128 { self.at += 1 }
+                else {
+                    let d = utf8.decode(self.source, self.at)?
+                    if utf8.is_whitespace(d.0) { break }
+                    self.at += d.1
+                }
+            }
+            Ok(sexp.Sexp.Atom(self.source[start..self.at].to_string()))
+        }
+    }
+}
+
+pub fn parse(source: str) -> Result(Vec(sexp.Sexp), String) {
+    var r = Reader { source, at: 0 }
+    var forms = Vec(sexp.Sexp).new()
+    loop {
+        r.skip()?
+        if r.at == source.len { break }
+        forms.push(r.read(0)?)
+    }
+    Ok(forms)
+}
