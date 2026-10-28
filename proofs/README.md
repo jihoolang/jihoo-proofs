@@ -10,6 +10,18 @@ It is a library experiment, with no new jihoo syntax, compiler rules, or
 runtime integer semantics. It does not require running Horn separately or
 copying a computed answer into the program.
 
+## Next work and destination
+
+The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
+puts this library in the implementation queue. First make local negative
+cases run in CI without Horn. Then use induction and derivation reuse to
+check a safety invariant for a finite state-transition table whose runtime
+adapter executes that exact table. Changed transitions and invalid induction
+assumptions must be rejected. Document the executable correspondence and
+resource costs before migrating the reusable API into `lib/` with a maintained
+example. This work is pending; the natural-number demonstration alone does
+not complete it.
+
 ## Try it
 
 From the repository root:

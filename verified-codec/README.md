@@ -12,6 +12,17 @@ the accepted theory or choose the verification goal. The adapter constructs
 each goal from the complete candidate tables. Attaching a correct proof for
 a different, even otherwise correct, pair of tables is rejected.
 
+## Next work and destination
+
+The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
+prioritizes the four-variant evaluator failure described below. Make that
+case pass, then measure 16, 64 and 256 variants, separating proof production
+from checking. Compare exhaustive table checking with certificates, add
+explicit stable wire tags, and preserve rejection of stale or unrelated
+evidence. After these checks run in CI, move the reusable codec into `lib/`
+and its example into `examples/`, with no experimental import paths required.
+The scalability and migration work has not yet been implemented.
+
 ## Run
 
 From the repository root, with the current self-hosted compiler in `out/jihoo`:

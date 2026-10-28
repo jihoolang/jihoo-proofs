@@ -5,9 +5,9 @@ This is a jihoo port of the trusted ground Horn certificate checker in
 The upstream project and this port use Apache-2.0.
 
 The experiment establishes that the checker can be written in ordinary
-jihoo and run both at runtime and during compile-time evaluation. It does
-not introduce contract syntax or connect certificates to jihoo programs.
-That connection is a later design decision.
+jihoo and run both at runtime and during compile-time evaluation. The codec
+adapter below connects ground certificates to executable tables; general
+jihoo function contracts still require a semantics and generated obligations.
 
 The separate [proof development experiment](../proofs/README.md) adds a
 restricted schematic checker for general statements, structural induction,
@@ -19,6 +19,17 @@ ground checker to a bounded executable table representation through a small
 trusted adapter. `Theory.from_forms` accepts S-expression trees from
 metaprograms, with the same declaration validation used by `Theory.parse`.
 The ground certificate rules and checks are unchanged.
+
+## Next work and destination
+
+The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
+prioritizes this checker as a reusable library. Extract local acceptance and
+rejection cases from differential tests so ordinary CI needs no sibling Horn
+checkout, retain a separately pinned differential suite, and stabilize the
+checking API and trust boundary. Migrate reusable modules into `lib/` and
+the CLI into an example, updating the codec and proof consumers together.
+Completion requires packaged imports without `-I experimental/...` and
+regression coverage on both supported targets.
 
 ## Scope
 
