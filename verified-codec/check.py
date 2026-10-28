@@ -3,10 +3,11 @@
 import argparse
 import itertools
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 
 
@@ -59,12 +60,12 @@ fn main() {{
 
 def main():
     ap = argparse.ArgumentParser(__doc__)
-    ap.add_argument("--compiler", type=Path, default=ROOT / "out/jihoo")
+    ap.add_argument("--compiler", type=Path, default=Path(shutil.which("jihoo") or "jihoo"))
     args = ap.parse_args()
     compiler = args.compiler.resolve()
     out = ROOT / "out/verified-codec"
     out.mkdir(parents=True, exist_ok=True)
-    includes = ["-I", HERE, "-I", ROOT / "experimental/proofs", "-I", ROOT / "experimental/kernel"]
+    includes = ["-I", HERE, "-I", ROOT / "proofs", "-I", ROOT / "kernel"]
 
     for source in ["example", "inspect"]:
         require(compiler, "build", HERE / f"{source}.jh", *includes, "-o", out / source)

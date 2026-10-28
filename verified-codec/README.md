@@ -14,7 +14,7 @@ a different, even otherwise correct, pair of tables is rejected.
 
 ## Next work and destination
 
-The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
+The [roadmap](../README.md#roadmap)
 has resolved the four-variant evaluator failure without changing its limits.
 An explicit exhaustive-checking API now covers 16, 64 and 256 variants. Both
 paths have CI regressions; larger unary certificates still exceed the step
@@ -24,10 +24,10 @@ example. Stable tags and library migration remain unimplemented.
 
 ## Run
 
-From the repository root, with the current self-hosted compiler in `out/jihoo`:
+From the repository root:
 
 ```sh
-nix develop --command out/jihoo run experimental/verified-codec/example.jh -I experimental/proofs -I experimental/kernel -- 0
+nix develop --command jihoo run verified-codec/example.jh -I proofs -I kernel -- 0
 ```
 
 ```text
@@ -136,7 +136,7 @@ The experiment uses the original ground certificate rules, not the schematic
 checker or its induction rule. `Theory.from_forms` is a small new entry point
 that accepts S-expression trees and runs the same declaration validation as
 `Theory.parse`. The fixed theory uses the whole-string parser from
-`experimental/proofs/syntax.jh`; proof and goal checking use the ground
+`proofs/syntax.jh`; proof and goal checking use the ground
 kernel's existing reader. No inference rule or interpreter limit changed.
 
 There is no new language syntax, general AST reflection, or macro facility.
@@ -155,7 +155,7 @@ that original limit. No inference rule, memory validation or limit was relaxed.
 ## Scaling measurements
 
 ```sh
-nix develop --command python3 experimental/verified-codec/scale.py --compiler out/jihoo
+nix develop --command python3 verified-codec/scale.py
 ```
 
 This compares both APIs for 4, 16, 64 and 256 variants, checks native round
@@ -184,10 +184,10 @@ source hashes identify the measured inputs.
 ## Validation
 
 CI runs this exhaustive and negative-case suite on x86_64 and aarch64 Linux
-through `scripts/check-experiments.py`. To run just the codec checks:
+through `scripts/check.py`. To run just the codec checks:
 
 ```sh
-nix develop --command python3 experimental/verified-codec/check.py
+nix develop --command python3 verified-codec/check.py
 ```
 
 This requires Python, the current jihoo compiler, and LLVM `opt` from the
@@ -231,7 +231,7 @@ certificate:
 
 ```sh
 mkdir -p out/verified-codec
-nix develop --command out/jihoo run experimental/verified-codec/inspect.jh -I experimental/kernel -- out/verified-codec 0 2 1 0 2 1 0
+nix develop --command jihoo run verified-codec/inspect.jh -I kernel -- out/verified-codec 0 2 1 0 2 1 0
 ```
 
 The arguments after the directory are the selected ordinal, three encoding

@@ -12,7 +12,7 @@ copying a computed answer into the program.
 
 ## Next work and destination
 
-The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
+The [roadmap](../README.md#roadmap)
 puts this library in the implementation queue. Local negative cases now run
 in CI without Horn or Rust. Next use induction and derivation reuse to
 check a safety invariant for a finite state-transition table whose runtime
@@ -28,8 +28,7 @@ From the repository root:
 
 ```sh
 mkdir -p out
-nix develop --command jihoo build -O2 compiler/main.jh -o out/jihoo
-nix develop --command out/jihoo run experimental/proofs/example.jh -I experimental/kernel
+nix develop --command jihoo run proofs/example.jh -I kernel
 ```
 
 Output:
@@ -93,7 +92,7 @@ adapter. It uses the original ground rules rather than this schematic checker.
 
 ## Checker and trust boundary
 
-The generic ground inference checks in `experimental/kernel` are unchanged. A ground
+The generic ground inference checks in `kernel` are unchanged. A ground
 certificate cannot by itself express the universal claim checked here.
 `schematic.jh` ports a **subset** of Horn's `src/schematic.rs`: typed open
 terms, rule steps, plain hypotheses, structural induction without outer
@@ -141,7 +140,7 @@ Horn's Agda development proves properties of its calculus and checker model.
 It does not prove this jihoo implementation or its parser correct.
 Acceptance establishes derivability in the selected theory, not the theory's
 adequacy for an intended mathematics. See
-[Horn's trust boundary](../../../horn/docs/TRUST.md).
+[Horn's trust boundary](../../horn/docs/TRUST.md).
 The source projects use Apache-2.0.
 
 ## Reproduce validation
@@ -150,7 +149,7 @@ CI runs the local acceptance/rejection suite, compile-time rejection cases,
 and optimized-IR erasure checks on x86_64 and aarch64 Linux. Run it locally:
 
 ```sh
-nix develop --command python3 experimental/proofs/check.py --local --compiler out/jihoo
+nix develop --command python3 proofs/check.py --local
 ```
 
 This needs Python, LLVM `opt` and the current compiler, without Horn or Rust.
@@ -158,7 +157,7 @@ The full differential suite additionally compares cases without a known local
 verdict and successful report fields against the pinned reference:
 
 ```sh
-nix develop .#differential --command python3 experimental/proofs/check.py --horn ../horn
+nix develop .#differential --command python3 proofs/check.py --horn ../horn
 ```
 
 This needs Python, Rust/Cargo, LLVM `opt`, and the sibling Horn checkout.
@@ -191,8 +190,8 @@ checker:
 
 ```sh
 mkdir -p out/proofs
-nix develop --command out/jihoo run experimental/proofs/export.jh -I experimental/kernel -- out/proofs
-nix develop --command out/jihoo build experimental/proofs/main.jh -I experimental/kernel -o out/proofs/schematic-check
+nix develop --command jihoo run proofs/export.jh -I kernel -- out/proofs
+nix develop --command jihoo build proofs/main.jh -I kernel -o out/proofs/schematic-check
 out/proofs/schematic-check out/proofs/theory.horn out/proofs/goals out/proofs/proof
 ```
 

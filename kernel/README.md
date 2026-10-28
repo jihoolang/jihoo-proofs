@@ -22,13 +22,13 @@ The ground certificate rules and checks are unchanged.
 
 ## Next work and destination
 
-The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
+The [roadmap](../README.md#roadmap)
 prioritizes this checker as a reusable library. Local acceptance and rejection
 cases now run in ordinary CI without Horn or Rust; the differential suite
 checks and records a pinned reference revision. Next stabilize the checking
 API and trust boundary. Migrate reusable modules into `lib/` and
 the CLI into an example, updating the codec and proof consumers together.
-Completion requires packaged imports without `-I experimental/...` and
+Completion requires packaged imports without `-I kernel` and
 regression coverage on both supported targets.
 
 ## Scope
@@ -71,11 +71,10 @@ From the repository root:
 
 ```sh
 mkdir -p out
-nix develop --command jihoo build -O2 compiler/main.jh -o out/jihoo
-nix develop --command out/jihoo build experimental/kernel/main.jh -o out/kernel-check
-out/kernel-check ../horn/examples/nat.horn ../horn/examples/nat.goals ../horn/examples/nat.proof
-nix develop --command out/jihoo run experimental/kernel/comptime.jh
-nix develop --command python3 experimental/kernel/check.py --local
+nix develop --command jihoo build kernel/main.jh -o out/kernel-check
+out/kernel-check kernel/fixtures/nat.horn kernel/fixtures/nat.goals kernel/fixtures/nat.proof
+nix develop --command jihoo run kernel/comptime.jh
+nix develop --command python3 kernel/check.py --local
 ```
 
 The natural-number example reports one goal, three steps and eight distinct
@@ -90,7 +89,7 @@ needs Python and the compiler, with no Horn or Rust dependency. Cases whose
 verdict needs the reference checker remain in the differential suite:
 
 ```sh
-nix develop .#differential --command python3 experimental/kernel/check.py --horn ../horn
+nix develop .#differential --command python3 kernel/check.py --horn ../horn
 ```
 
 Differential validation reads upstream Rust sources without modifying the

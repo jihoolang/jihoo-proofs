@@ -4,10 +4,11 @@ import argparse
 import json
 import random
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 HORN_REVISION = "18caf6d39088e1569beff678bc4461a28b8d2827"
 
@@ -144,13 +145,13 @@ def main():
     mode.add_argument("--local", action="store_true", help="run expected-verdict cases without Horn or Rust")
     mode.add_argument("--horn", type=Path, default=ROOT.parent / "horn")
     ap.add_argument("--horn-revision", default=HORN_REVISION, help="required reference commit for differential checks")
-    ap.add_argument("--compiler", type=Path, default=ROOT / "out/jihoo")
+    ap.add_argument("--compiler", type=Path, default=Path(shutil.which("jihoo") or "jihoo"))
     args = ap.parse_args()
     horn = args.horn.resolve()
     revision = None if args.local else reference_revision(horn, args.horn_revision)
     out = ROOT / "out/kernel"
     out.mkdir(parents=True, exist_ok=True)
-    build(str(args.compiler.resolve()), "build", "experimental/kernel/main.jh", "-o", str(out / "jihoo-kernel"))
+    build(str(args.compiler.resolve()), "build", "kernel/main.jh", "-o", str(out / "jihoo-kernel"))
     if not args.local:
         build_reference(horn, out)
     count = accepted = skipped = 0
@@ -172,10 +173,10 @@ def main():
                 raise AssertionError(f"{name}: expected={expected}\nRust ({rust.returncode}): {rust.stdout!r} {rust.stderr!r}\njihoo ({jihoo.returncode}): {jihoo.stdout!r} {jihoo.stderr!r}\nInputs retained in {out}")
         count += 1
         accepted += ok
-    build(str(args.compiler.resolve()), "run", "experimental/kernel/comptime.jh")
+    build(str(args.compiler.resolve()), "run", "kernel/comptime.jh")
     invalid = out / "invalid-comptime.jh"
     invalid.write_text((HERE / "comptime.jh").read_text().replace("(step 2 plus-two (1))", "(step 2 plus-two (2))"))
-    rejected = run(str(args.compiler.resolve()), "build", str(invalid), "-I", "experimental/kernel", "-o", str(out / "invalid-comptime"))
+    rejected = run(str(args.compiler.resolve()), "build", str(invalid), "-I", "kernel", "-o", str(out / "invalid-comptime"))
     if rejected.returncode == 0 or b"compile-time evaluation reached a trap" not in rejected.stderr:
         raise AssertionError(f"invalid compile-time certificate was not rejected by the evaluator: {rejected.stderr!r}")
     mode = "local" if args.local else "differential"

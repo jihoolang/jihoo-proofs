@@ -1,0 +1,71 @@
+# Runs the local kernel, proof and codec regressions with the compiler pinned
+# in flake.lock, on x86_64 and aarch64 Linux. The Horn differential suites
+# run on request.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      horn_differential:
+        description: Also compare the checkers with the pinned Horn reference
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-latest
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Regression tests
+        run: nix develop --command python3 scripts/check.py
+      - name: Preserve reports and failing inputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports-${{ matrix.system }}
+          path: out
+          if-no-files-found: ignore
+
+  horn-differential:
+    if: github.event_name == 'workflow_dispatch' && inputs.horn_differential
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: jihoo12/horn
+          ref: 18caf6d39088e1569beff678bc4461a28b8d2827
+          path: out/horn
+      - uses: cachix/install-nix-action@v31
+      - name: Compare checkers with Horn
+        run: nix develop .#differential --command python3 scripts/check.py --horn out/horn --horn-revision 18caf6d39088e1569beff678bc4461a28b8d2827
+      - name: Preserve differential reports and failing inputs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports-horn-differential
+          path: |
+            out/report.json
+            out/kernel
+            out/proofs
+          if-no-files-found: ignore

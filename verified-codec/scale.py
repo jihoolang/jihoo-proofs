@@ -8,11 +8,12 @@ import os
 from pathlib import Path
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 sys.dont_write_bytecode = True
 
@@ -47,7 +48,7 @@ def resources(path):
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
-    parser.add_argument("--compiler", type=Path, default=ROOT / "out/jihoo")
+    parser.add_argument("--compiler", type=Path, default=Path(shutil.which("jihoo") or "jihoo"))
     parser.add_argument("--output", type=Path, default=ROOT / "out/codec-scaling")
     parser.add_argument("--sizes", nargs="+", type=int, default=[4, 16, 64, 256])
     args = parser.parse_args()
@@ -62,11 +63,11 @@ def main():
               "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "source_tree_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
               "host": platform.platform(), "measurements": []}
-    sources = [*sorted((ROOT / "compiler").glob("*.jh")), ROOT / "lib/std/utf8.jh",
-               *sorted((ROOT / "experimental/kernel").glob("*.jh")),
+    sources = [*sorted((ROOT / "proofs").glob("*.jh")),
+               *sorted((ROOT / "kernel").glob("*.jh")),
                *sorted(HERE.glob("*.jh")), HERE / "check.py", HERE / "scale.py"]
     report["source_sha256"] = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
-    includes = ["-I", HERE, "-I", ROOT / "experimental/kernel", "-I", ROOT / "experimental/proofs"]
+    includes = ["-I", HERE, "-I", ROOT / "kernel", "-I", ROOT / "proofs"]
     passed = True
     for n in args.sizes:
         for exhaustive in (False, True):

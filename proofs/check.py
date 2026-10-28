@@ -5,11 +5,12 @@ import importlib.util
 import json
 import random
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 sys.dont_write_bytecode = True
 
@@ -105,20 +106,20 @@ def schematic_cases(theory, goals, proof):
 
 def main():
     ap = argparse.ArgumentParser(__doc__)
-    spec = importlib.util.spec_from_file_location("ground_cases", ROOT / "experimental/kernel/check.py")
+    spec = importlib.util.spec_from_file_location("ground_cases", ROOT / "kernel/check.py")
     ground = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ground)
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--local", action="store_true", help="run expected-verdict cases without Horn or Rust")
     mode.add_argument("--horn", type=Path, default=ROOT.parent / "horn")
     ap.add_argument("--horn-revision", default=ground.HORN_REVISION, help="required reference commit for differential checks")
-    ap.add_argument("--compiler", type=Path, default=ROOT / "out/jihoo")
+    ap.add_argument("--compiler", type=Path, default=Path(shutil.which("jihoo") or "jihoo"))
     args = ap.parse_args()
     horn, compiler = args.horn.resolve(), args.compiler.resolve()
     revision = None if args.local else ground.reference_revision(horn, args.horn_revision)
     out = ROOT / "out/proofs"
     out.mkdir(parents=True, exist_ok=True)
-    include = ROOT / "experimental/kernel"
+    include = ROOT / "kernel"
     for source, binary in [("main", "schematic-check"), ("export", "export"), ("example", "example")]:
         require(compiler, "build", HERE / f"{source}.jh", "-I", include, "-o", out / binary)
     example = require(out / "example")
