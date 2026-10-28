@@ -32,3 +32,17 @@ pub fn well_formed(comptime N: i64, p: program.Plan(N)) -> bool {
     for x in p.decode { if x < 0 || x >= N { return false } }
     true
 }
+
+// Independent finite checking needs no certificate or proof-domain encoding.
+pub fn roundtrip(comptime N: i64, p: program.Plan(N), ordinal: i64) -> bool {
+    if ordinal < 0 || ordinal >= N { return false }
+    let tag = p.encode[ordinal]
+    if tag < 0 || tag >= N { return false }
+    p.decode[tag] == ordinal
+}
+
+pub fn exhaustive(comptime N: i64, p: program.Plan(N)) -> bool {
+    if !well_formed(p) { return false }
+    for i in 0..N { if !roundtrip(p, i) { return false } }
+    true
+}

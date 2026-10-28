@@ -21,11 +21,11 @@ def require(*args):
     return p
 
 
-def candidate(body="", evidence="", variants="A, B, C", runtime=False):
+def candidate(body="", evidence="", variants="A, B, C", runtime=False, exhaustive=False):
     evidence = evidence or "let p = Candidate.generate(T)\n        producer.certificate(p, ordinal)"
     construction = "let c = codec.build(E, Candidate)" if runtime else "let c = VERIFIED"
     constant = "" if runtime else "const VERIFIED = codec.build(E, Candidate)"
-    return f'''import codec
+    source = f'''import codec
 import producer
 import program
 enum E {{ {variants} }}
@@ -43,8 +43,9 @@ impl Candidate {{
 {constant}
 fn main() {{
     {construction}
-    inline for i in 0..variant_count(E) {{
-        let value = make_variant(E, i, fn(j) {{ trap() }})
+    for i in 0..variant_count(E) {{
+        let value = c.decode(variant_count(E) - 1 - i).unwrap()
+        assert(variant_of(value) == i, "decoding")
         assert(c.encode(value) == variant_count(E) - 1 - i, "encoding")
         assert(variant_of(c.decode(c.encode(value)).unwrap()) == i, "round trip")
     }}
@@ -53,6 +54,7 @@ fn main() {{
     println("ok")
 }}
 '''
+    return source.replace("codec.build(", "codec.build_exhaustive(") if exhaustive else source
 
 
 def main():
@@ -72,12 +74,19 @@ def main():
         assert require(out / "example", tag).stdout.decode() == expected
         runtime_cases += 1
 
-    positives = [("one", "A", False), ("two", "A, B", False), ("three", "A, B, C", False), ("runtime-construction", "A, B, C", True)]
+    positives = [("one", "A", False), ("two", "A, B", False), ("three", "A, B, C", False), ("four", "A, B, C, D", False), ("runtime-construction", "A, B, C", True)]
     for name, variants, runtime in positives:
         path = out / f"valid-{name}.jh"
         path.write_text(candidate(variants=variants, runtime=runtime))
         require(compiler, "build", path, *includes, "-o", out / f"valid-{name}")
         assert require(out / f"valid-{name}").stdout == b"ok\n"
+
+    exhaustive_sizes = [4, 16, 64, 256]
+    for n in exhaustive_sizes:
+        path = out / f"valid-exhaustive-{n}.jh"
+        path.write_text(candidate(variants=", ".join(f"V{i}" for i in range(n)), exhaustive=True))
+        require(compiler, "build", path, *includes, "-o", out / f"valid-exhaustive-{n}")
+        assert require(out / f"valid-exhaustive-{n}").stdout == b"ok\n"
 
     negatives = [
         ("wrong-decoder", candidate("p.decode[0] = 0")),
@@ -103,6 +112,19 @@ def main():
         if result.returncode == 0 or b"compile-time evaluation reached a trap" not in result.stderr:
             raise AssertionError(f"{name} was not rejected by compile-time verification: {result.stderr!r}")
 
+    # Both construction paths must reject malformed and non-inverse tables,
+    # payloads and invalid runtime-written construction. Evidence attacks
+    # remain specific to the certificate API; the finite API takes no proof.
+    exhaustive_negatives = ["wrong-decoder", "duplicate-encoding", "negative-tag", "decoder-out-of-range", "payload-variant", "bad-runtime-construction"]
+    for name, source in negatives:
+        if name not in exhaustive_negatives:
+            continue
+        path = out / f"invalid-exhaustive-{name}.jh"
+        path.write_text(source.replace("codec.build(", "codec.build_exhaustive("))
+        result = run(compiler, "build", path, *includes, "-o", out / f"invalid-exhaustive-{name}")
+        if result.returncode == 0 or b"compile-time evaluation reached a trap" not in result.stderr:
+            raise AssertionError(f"exhaustive {name} was not rejected during compilation: {result.stderr!r}")
+
     # A safe client cannot replace a checked plan after certification.
     forged = out / "invalid-private-plan.jh"
     forged.write_text(candidate().replace("let c = VERIFIED", "var c = VERIFIED\n    c.plan.encode[0] = 0"))
@@ -120,6 +142,9 @@ def main():
             result = run(out / "inspect", out, row, *entries)
             if result.returncode not in [0, 1] or (result.returncode == 0) != expected:
                 raise AssertionError(f"table mismatch E={forward} D={backward} row={row}: {result.stdout!r} {result.stderr!r}")
+            direct = run(out / "inspect", out, row, *entries, "--exhaustive")
+            if direct.returncode not in [0, 1] or (direct.returncode == 0) != expected:
+                raise AssertionError(f"exhaustive mismatch E={forward} D={backward} row={row}: {direct.stdout!r} {direct.stderr!r}")
             table_cases += 1
             accepted += expected
 
@@ -130,10 +155,14 @@ def main():
     definitions = [line for line in (out / "example.opt.ll").read_text().splitlines() if line.startswith("define ")]
     forbidden = ["kernel.", "syntax.", "sexp.", "lex.", "producer.", "model.", "codec.verify", "codec.build"]
     assert not any(any(name in line for name in forbidden) for line in definitions), definitions
+    require(compiler, "emit-llvm", out / "valid-exhaustive-256.jh", *includes, "-o", out / "exhaustive.ll")
+    require("opt", "-S", "-passes=default<O2>", out / "exhaustive.ll", "-o", out / "exhaustive.opt.ll")
+    exhaustive_definitions = [line for line in (out / "exhaustive.opt.ll").read_text().splitlines() if line.startswith("define ")]
+    assert not any(any(name in line for name in forbidden) for line in exhaustive_definitions), exhaustive_definitions
     require(compiler, "emit-obj", HERE / "example.jh", *includes, "--target", "aarch64", "-o", out / "example-aarch64.o")
-    report = {"runtime_inputs": runtime_cases, "positive_construction_cases": len(positives), "compile_time_rejection_cases": len(negatives), "private_plan_replacement_rejected": True, "exhaustive_table_cases": table_cases, "accepted_table_rows": accepted, "rejected_table_rows": table_cases - accepted, "optimized_runtime_verifier_functions": 0, "aarch64_object_emitted": True}
+    report = {"runtime_inputs": runtime_cases, "positive_construction_cases": len(positives), "exhaustive_construction_sizes": exhaustive_sizes, "compile_time_rejection_cases": len(negatives), "exhaustive_compile_time_rejection_cases": len(exhaustive_negatives), "private_plan_replacement_rejected": True, "exhaustive_table_cases": table_cases, "both_checking_paths_match_python": True, "accepted_table_rows": accepted, "rejected_table_rows": table_cases - accepted, "optimized_runtime_verifier_functions": 0, "exhaustive_optimized_runtime_verifier_functions": 0, "aarch64_object_emitted": True}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"{runtime_cases} runtime inputs, {len(positives)} constructions, {len(negatives)} compile-time rejections, plan privacy, and {table_cases} exhaustive table rows passed; verification erased at O2")
+    print(f"{runtime_cases} runtime inputs, {len(positives)} certificate constructions, exhaustive sizes {exhaustive_sizes}, {len(negatives)} certificate and {len(exhaustive_negatives)} exhaustive rejections, plan privacy, and {table_cases} table rows through both checking paths passed; verification erased at O2")
 
 
 if __name__ == "__main__":

@@ -50,6 +50,13 @@ arity before interning. Full-node comparison decides equality even when
 hashes collide. The arena retains the upstream flat-node representation,
 hash function and linear probing.
 
+ASCII tokens use direct byte classification; non-ASCII input retains strict
+UTF-8 decoding and Unicode White_Space. Buffered readers still validate whole
+lines, including comments. The initial arena table is now 64 slots, growing
+with the same load factor and rehashing rules; small compile-time obligations
+avoid initializing 1,024 slots. The 514-case differential suite still compares
+verdicts and all successful report fields with the pinned upstream checker.
+
 Host-sized indices use jihoo's `i64`; ground ids remain `u32`. A parsed
 step index above the signed range is guaranteed out of bounds, never wrapped
 to a valid index. Goals use a hash map rather than a tree map because ordering

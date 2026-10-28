@@ -1,0 +1,504 @@
+{
+  "compiler": "/nix/store/g0mfwvxb80q266hji48x3dgg515sraxv-jihoo-0.1.3/bin/jihoo",
+  "compiler_sha256": "ee8af18a20fc133237af242a8dc0727a66bbeb8967e34a05820c18eaefd2e187",
+  "revision": "78e1e60a4ddc96e8a09d4f887697621dd56fe621",
+  "source_tree_dirty": true,
+  "host": "Linux-6.18.56-x86_64-with-glibc2.44",
+  "measurements": [
+    {
+      "variants": 4,
+      "mode": "certificate",
+      "check": {
+        "exit_code": 0,
+        "elapsed_seconds": 1.0008407040004386,
+        "peak_process_memory_kib": 50452,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "certificate_production": {
+              "evaluations": 4,
+              "steps": 147840,
+              "max_steps": 37023,
+              "allocation_bytes": 232214,
+              "failed": 0
+            },
+            "certificate_checking": {
+              "evaluations": 4,
+              "steps": 3882287,
+              "max_steps": 982275,
+              "allocation_bytes": 7288066,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 2,
+              "steps": 798,
+              "max_steps": 622,
+              "allocation_bytes": 1219,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "build": {
+        "exit_code": 0,
+        "elapsed_seconds": 1.1500796390009782,
+        "peak_process_memory_kib": 115676,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "certificate_production": {
+              "evaluations": 4,
+              "steps": 147840,
+              "max_steps": 37023,
+              "allocation_bytes": 232214,
+              "failed": 0
+            },
+            "certificate_checking": {
+              "evaluations": 4,
+              "steps": 3882287,
+              "max_steps": 982275,
+              "allocation_bytes": 7288066,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 2,
+              "steps": 798,
+              "max_steps": 622,
+              "allocation_bytes": 1219,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "runtime": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.0006956529996386962,
+        "peak_process_memory_kib": 25648
+      }
+    },
+    {
+      "variants": 4,
+      "mode": "exhaustive",
+      "check": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.14875705000122252,
+        "peak_process_memory_kib": 25648,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 1759,
+              "max_steps": 1759,
+              "allocation_bytes": 1410,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 160,
+              "max_steps": 160,
+              "allocation_bytes": 384,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "build": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.286925495000105,
+        "peak_process_memory_kib": 83044,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 1759,
+              "max_steps": 1759,
+              "allocation_bytes": 1410,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 160,
+              "max_steps": 160,
+              "allocation_bytes": 384,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "runtime": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.0006742130008206004,
+        "peak_process_memory_kib": 25648
+      }
+    },
+    {
+      "variants": 16,
+      "mode": "certificate",
+      "check": {
+        "exit_code": 1,
+        "elapsed_seconds": 0.45061832899955334,
+        "peak_process_memory_kib": 49704,
+        "failure_diagnostic": "error: /home/jihoo/jihoo/lib/std/vec.jh:273:18: compile-time evaluation exceeded its step limit",
+        "evaluator_limit_reached": true,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "certificate_production": {
+              "evaluations": 1,
+              "steps": 178183,
+              "max_steps": 178183,
+              "allocation_bytes": 285824,
+              "failed": 0
+            },
+            "certificate_checking": {
+              "evaluations": 2,
+              "steps": 2000000,
+              "max_steps": 1000000,
+              "allocation_bytes": 3518954,
+              "failed": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "variants": 16,
+      "mode": "exhaustive",
+      "check": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.15324172399959934,
+        "peak_process_memory_kib": 25648,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 6211,
+              "max_steps": 6211,
+              "allocation_bytes": 4710,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 448,
+              "max_steps": 448,
+              "allocation_bytes": 1536,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "build": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.29147494900098536,
+        "peak_process_memory_kib": 83104,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 6211,
+              "max_steps": 6211,
+              "allocation_bytes": 4710,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 448,
+              "max_steps": 448,
+              "allocation_bytes": 1536,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "runtime": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.0006982480008446146,
+        "peak_process_memory_kib": 25648
+      }
+    },
+    {
+      "variants": 64,
+      "mode": "certificate",
+      "check": {
+        "exit_code": 1,
+        "elapsed_seconds": 0.2846401690003404,
+        "peak_process_memory_kib": 54296,
+        "failure_diagnostic": "error: /home/jihoo/jihoo/lib/std/string.jh:60:9: compile-time evaluation exceeded its step limit",
+        "evaluator_limit_reached": true,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "certificate_production": {
+              "evaluations": 3,
+              "steps": 3000000,
+              "max_steps": 1000000,
+              "allocation_bytes": 5335761,
+              "failed": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "variants": 64,
+      "mode": "exhaustive",
+      "check": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.17040205100056482,
+        "peak_process_memory_kib": 25648,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 24019,
+              "max_steps": 24019,
+              "allocation_bytes": 17910,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 1600,
+              "max_steps": 1600,
+              "allocation_bytes": 6144,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "build": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.3167723869992187,
+        "peak_process_memory_kib": 83476,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 24019,
+              "max_steps": 24019,
+              "allocation_bytes": 17910,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 1600,
+              "max_steps": 1600,
+              "allocation_bytes": 6144,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "runtime": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.0006834800005890429,
+        "peak_process_memory_kib": 25648
+      }
+    },
+    {
+      "variants": 256,
+      "mode": "certificate",
+      "check": {
+        "exit_code": 1,
+        "elapsed_seconds": 0.30465939799978514,
+        "peak_process_memory_kib": 58088,
+        "failure_diagnostic": "error: /home/jihoo/jihoo/lib/std/string.jh:50:22: compile-time evaluation exceeded its step limit",
+        "evaluator_limit_reached": true,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "certificate_production": {
+              "evaluations": 3,
+              "steps": 3000000,
+              "max_steps": 1000000,
+              "allocation_bytes": 5606745,
+              "failed": 3
+            }
+          }
+        }
+      }
+    },
+    {
+      "variants": 256,
+      "mode": "exhaustive",
+      "check": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.5968851509987871,
+        "peak_process_memory_kib": 115064,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 95251,
+              "max_steps": 95251,
+              "allocation_bytes": 70710,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 6208,
+              "max_steps": 6208,
+              "allocation_bytes": 24576,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "build": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.7608522450009332,
+        "peak_process_memory_kib": 114824,
+        "resources": {
+          "target": "x86_64",
+          "limits": {
+            "steps": 1000000,
+            "allocation_bytes": 67108864,
+            "allocations": 1000000,
+            "active_calls": 128
+          },
+          "stages": {
+            "exhaustive_checking": {
+              "evaluations": 1,
+              "steps": 95251,
+              "max_steps": 95251,
+              "allocation_bytes": 70710,
+              "failed": 0
+            },
+            "other": {
+              "evaluations": 1,
+              "steps": 6208,
+              "max_steps": 6208,
+              "allocation_bytes": 24576,
+              "failed": 0
+            }
+          }
+        }
+      },
+      "runtime": {
+        "exit_code": 0,
+        "elapsed_seconds": 0.0006734320013492834,
+        "peak_process_memory_kib": 25648
+      }
+    }
+  ],
+  "source_sha256": {
+    "compiler/ast.jh": "bdc96bb05abb2b639ed2d0da0bb0a0dc63fbd0606b853816ff9876b68052011b",
+    "compiler/astdump.jh": "fe35cf8c27c08d50d8cbcc3c51fc7e02df131e5dc49c96c84fe9901e8b206691",
+    "compiler/backend.jh": "cc889b4e0feeeda1005ef76cc54f34560688b8452506de052cb648c5e788325d",
+    "compiler/body.jh": "237e9427d2dbddddeec8834026fc0627d0efc25b97dada53f5e5f62fbf1aa49a",
+    "compiler/builtins.jh": "1af0140d6f56391a7199e4118c07125f1076a78569a089c9725ab219d86bdc3c",
+    "compiler/cabi.jh": "9711af94a27180b6e12ef5090f2b438ef3c50580e8aee2330ffcdbd11c395ca7",
+    "compiler/check.jh": "0154a2c8f0b8e63a50410298ef730bf5181b690c4d556a460d2081d99e2bc88c",
+    "compiler/diag.jh": "d93b83f3ee4f3e17442d56ce1484cb73b3cc8c7190954f120321ebad8fb4e096",
+    "compiler/elab.jh": "0f8dbda4ab46f0a61c6195edda2225add31c92fffbef51e697889164218f5724",
+    "compiler/fmt.jh": "0521e1b1ae5a52737e384bf95eef748c8a263071297e8d196b9fdfbce1a9c29e",
+    "compiler/format.jh": "1eebd1e953b7567d5eae88edcd87d300ac197890f746af0263564bae7888f5d1",
+    "compiler/host.aarch64.jh": "54d15691ae31dad69315abd4a2adf1e8761f7c2f2d25058d2a79ec911486b427",
+    "compiler/host.x86_64.jh": "5655e5045bf93da45448e49f56410bcca99406cff73f684704327cb26cd120f2",
+    "compiler/interp.jh": "34d9aecb18baf3b5a255e52592d34dd8a0da382d0c2b42f77581ac92945fff92",
+    "compiler/lex.jh": "f19afe4c60b5707da241b571bc7918319856d6119ba1f2729a1741046edd495b",
+    "compiler/llvm.jh": "5c796d34517f5e098be0808111e91dd47ead2ea775140ef52113b4950346dcd2",
+    "compiler/load.jh": "33d8779886fcf60c327bdcd6fb10e04dd500c587388fe76f8913a06397ef0a10",
+    "compiler/main.jh": "81262f248f56067e05fb988a5b935c49b1afa29d12db001c0fbf6f7ea6a3213e",
+    "compiler/mir.jh": "0cc606ed9e76d60309867bf364e939e450dd8f23396f033418ea7ab37d537cde",
+    "compiler/os.jh": "4ae9b0105ffebd7a019920ebd84bba3920fed1056214ac22293df3a2b46aba15",
+    "compiler/parse.jh": "13aa8df94c1e2b3ac07230ade7582ef259f6eca3e3a5a7ce4ecceecb8a77e9be",
+    "compiler/pat.jh": "b69f1488d302bea6d0257f6918681435cf0a7aa72a6be13088b81fca3bf57634",
+    "compiler/sema.jh": "297fb6b5b78f6680946b89b4935a64eb0aea5094c8c6b4b644d7780496ed28e0",
+    "compiler/target.jh": "71b0bc3a82159bb50107c8795af0ecdfd1f72ab474e8e4d7247aa9f78d199e6c",
+    "compiler/types.jh": "1a15fb1dfa075d80d4d3f2fa19759145d8fcf937d58ede1c9407aa56e64b3796",
+    "lib/std/utf8.jh": "a5c7405e973755b0b7c86c517e29f8d136e36b0e99a690a299cd63cee218199e",
+    "experimental/kernel/borrow_repro.jh": "dd0d33541a9036008fa25aa5b2cc0d9456466b2e9ed5879d2950a160d4d99c5d",
+    "experimental/kernel/comptime.jh": "88219a6c998875cf576dd6f0ab33d02c85941660c35343737d55161a3861e6a0",
+    "experimental/kernel/kernel.jh": "1d0fa9f8fc0f1ec27e0e3119713c94cd866b42c696e82e87906cda71f11de4ae",
+    "experimental/kernel/lex.jh": "7872f39848f612f96d42aaf3a350dd637981ca4e3c761aa8a6d6148f5bceb6ce",
+    "experimental/kernel/main.jh": "120fb99a65644ea8569eb3c017a03c378418ea5460492ca2bf07b74cb7430260",
+    "experimental/kernel/sexp.jh": "28d107b659343e6ec086816f3a16b419261ed6b6c755cac5106f5cc6554854d0",
+    "experimental/verified-codec/codec.jh": "28ce07e0906b86df98a89143c6e66256bd827a6695f0a40f16e4b374b5ef13b7",
+    "experimental/verified-codec/example.jh": "a55be66f77efbb3191fc466064acc9c16d1b52a13d4f983a5367861789427e8b",
+    "experimental/verified-codec/inspect.jh": "0583f1464afe4fb409b94181cd2665a6b7396a698f8cd2fecb0079f11a56d9dd",
+    "experimental/verified-codec/model.jh": "4cae48b729a5faa99f21375076264fa2459df48c104f4108a8bba0a674715193",
+    "experimental/verified-codec/producer.jh": "74e7bbc99a8880e8f9520e65e6706816912717da9d44abb23c75e4d718e0b358",
+    "experimental/verified-codec/program.jh": "d1015dc4a62adff21c39776431fcd1c299980d55e13a37818ce16afe43d09de6",
+    "experimental/verified-codec/check.py": "938e25f345e751af0a6ea499b59f899b5e0cf2ff0d8a58c9f0e636f9a83cdb89",
+    "experimental/verified-codec/scale.py": "79517ee194ddacd9c59b57121373446e188639e4414d7b92b372ba7cdf3f570f"
+  }
+}

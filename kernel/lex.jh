@@ -33,9 +33,12 @@ impl(R: io.BufRead) Lexer(R) {
                 self.count += n as u64
                 continue
             }
-            let decoded = utf8.decode(self.line.as_str(), start)?
+            let line = self.line.as_str()
+            let byte = line[start]
+            let decoded = if byte < 128 { (byte as u32, 1) } else { utf8.decode(line, start)? }
             let c = decoded.0
-            if utf8.is_whitespace(c) {
+            let space = if c < 128 { c == 32 || (c >= 9 && c <= 13) } else { utf8.is_whitespace(c) }
+            if space {
                 self.pos += decoded.1
             } else if c == ';' as u32 {
                 self.pos = self.line.len()
@@ -44,9 +47,11 @@ impl(R: io.BufRead) Lexer(R) {
                 let kind = if c == '(' as u32 { Kind.Open } else { Kind.Close }
                 return Ok(Some((kind, start, start + 1)))
             } else {
-                while self.pos < self.line.len() {
-                    let d = utf8.decode(self.line.as_str(), self.pos)?
-                    if utf8.is_whitespace(d.0) || d.0 == '(' as u32 ||
+                while self.pos < line.len {
+                    let b = line[self.pos]
+                    let d = if b < 128 { (b as u32, 1) } else { utf8.decode(line, self.pos)? }
+                    let ws = if d.0 < 128 { d.0 == 32 || (d.0 >= 9 && d.0 <= 13) } else { utf8.is_whitespace(d.0) }
+                    if ws || d.0 == '(' as u32 ||
                         d.0 == ')' as u32 || d.0 == ';' as u32 { break }
                     self.pos += d.1
                 }

@@ -34,6 +34,20 @@ pub fn build(comptime T: type, comptime G: type) -> Codec(T) {
     Codec(T) { plan: p }
 }
 
+// An explicit alternative for finite tables. Generate, check and freeze one
+// exact candidate in the same evaluation; this API does not accept evidence.
+pub fn build_exhaustive(comptime T: type, comptime G: type) -> Codec(T) {
+    inline for i in 0..variant_count(T) {
+        inline if variant_field_count(T, i) != 0 { comptime trap() }
+    }
+    let p = comptime {
+        let candidate = G.generate(T)
+        if !model.exhaustive(candidate) { trap() }
+        candidate
+    }
+    Codec(T) { plan: p }
+}
+
 impl(T: type) Codec(T) {
     pub fn encode(self, value: T) -> i64 { self.plan.encode[variant_of(value)] }
 

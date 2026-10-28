@@ -15,13 +15,12 @@ a different, even otherwise correct, pair of tables is rejected.
 ## Next work and destination
 
 The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
-prioritizes the four-variant evaluator failure described below. Make that
-case pass, then measure 16, 64 and 256 variants, separating proof production
-from checking. Compare exhaustive table checking with certificates, add
-explicit stable wire tags, and preserve rejection of stale or unrelated
-evidence. After these checks run in CI, move the reusable codec into `lib/`
-and its example into `examples/`, with no experimental import paths required.
-The scalability and migration work has not yet been implemented.
+has resolved the four-variant evaluator failure without changing its limits.
+An explicit exhaustive-checking API now covers 16, 64 and 256 variants. Both
+paths have CI regressions; larger unary certificates still exceed the step
+budget. Next replace their repeated serialization/parsing, add explicit stable
+wire tags, and migrate the reusable codec into `lib/` with a maintained
+example. Stable tags and library migration remain unimplemented.
 
 ## Run
 
@@ -58,6 +57,20 @@ variant changes the generated tables and the verification obligations.
 `build` checks during compilation even when called from ordinary runtime code.
 Its executable tables are frozen with `comptime`; generation is never deferred
 to a runtime call that could produce a different unchecked result.
+
+For a finite codec without certificates, use:
+
+```jihoo
+const CODEC = codec.build_exhaustive(Signal, producer.Reverse)
+```
+
+This API generates one candidate, checks every table entry and every round
+trip, and freezes that exact candidate during the same evaluation. It returns
+the same private `Codec(T)` and runtime implementation. The generator needs
+only `generate`; evidence is not an input to this API. `codec.build` continues
+to require and check certificates, including rejection of stale or unrelated
+evidence. Both APIs reject payload enums and invalid tables during compilation,
+including when construction is written in runtime code.
 
 ## The connection between execution and proof
 
@@ -134,11 +147,39 @@ is not necessary for enum codecs. Its role here is to demonstrate how a
 producer can supply evidence that a fixed, independent checker validates
 against the actual generated representation.
 
-The positive examples cover one, two, and three variants. This unary encoding
-and textual certificate path are deliberately small: a four-variant reverse
-codec currently exceeds the interpreter's one-million-step limit. Proof
-generation and checking can require substantial compile time. No general
-scalability or C performance claim follows from this experiment.
+The certificate examples cover one through four variants. The four-variant
+case previously exceeded one million steps while checking; ASCII token and
+UTF-8 fast paths plus a smaller initial arena now keep every obligation within
+that original limit. No inference rule, memory validation or limit was relaxed.
+
+## Scaling measurements
+
+```sh
+nix develop --command python3 experimental/verified-codec/scale.py --compiler out/jihoo
+```
+
+This compares both APIs for 4, 16, 64 and 256 variants, checks native round
+trips for every successful construction, and preserves checking/build time,
+Linux per-process peak RSS, diagnostics and evaluator profiles under
+`out/codec-scaling`. Each timing is one observation, not a controlled runtime
+performance claim. Timed compiler invocations have resource reporting enabled,
+so their elapsed time includes profiling and report output. Certificate
+production and checking have separate resource
+summaries. Larger expected certificate limits are recorded as failures, never
+as accepted constructions; unexpected compiler failures fail the command.
+
+In the recorded run, the largest four-variant certificate check took 982,275
+steps; its separate proof production took at most 37,023. Exhaustive checking
+took 1,759, 6,211, 24,019 and 95,251 steps for 4, 16, 64 and 256 variants.
+The unary certificate path still reaches the checking limit at 16 variants
+and the production limit at 64 and 256. Its next optimization is a shared
+term/certificate representation that removes repeated unary serialization
+and parsing while preserving the connection to the exact executable tables.
+
+[Recorded measurements](scaling-results.json) retain the compiler fingerprint,
+source hashes, host, timings, memory use and stage resource summaries. The
+recorded source tree was modified while preparing this change; the individual
+source hashes identify the measured inputs.
 
 ## Validation
 
@@ -153,6 +194,17 @@ This requires Python, the current jihoo compiler, and LLVM `opt` from the
 development shell. It does not require the sibling Horn checkout. All
 generated sources, binaries, diagnostic inputs, LLVM IR, and `report.json`
 are written under `out/verified-codec`. `--compiler PATH` selects a compiler.
+
+Validation on 2026-10-28:
+
+- The four-variant certificate regression passes with the original limits.
+- Exhaustive construction at 4, 16, 64 and 256 variants passes runtime checks
+  for every tag; six malformed/payload/runtime-construction cases are rejected.
+- Both checking paths match the independent Python oracle on all 2,187 rows.
+- O2 removes the certificate checker from the example and the exhaustive
+  checker and constructor from the 256-variant program.
+- Compiler report tests cover both targets, unchanged IR, JSON source errors,
+  nested obligation context and unchanged step/memory/depth rejections.
 
 Validation on 2026-10-27:
 

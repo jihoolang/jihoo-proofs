@@ -203,7 +203,9 @@ impl Arena {
     fn new() -> Arena {
         var starts = Vec(i64).new()
         starts.push(0)
-        Arena { data: Vec(u32).new(), starts, table: Vec(u32).filled(1024, NONE), bits: 10 }
+        // Small compile-time obligations should not initialize 1,024 slots.
+        // The same load factor and rehashing rules grow larger developments.
+        Arena { data: Vec(u32).new(), starts, table: Vec(u32).filled(64, NONE), bits: 6 }
     }
 
     fn len(self) -> i64 { self.starts.len() - 1 }

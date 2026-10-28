@@ -9,7 +9,8 @@ import kernel
 
 fn run() -> Result((), String) {
     let args = env.args()
-    if args.len() != 9 { return Err("usage: inspect OUTPUT_DIRECTORY ROW E0 E1 E2 D0 D1 D2") }
+    let exhaustive = args.len() == 10 && args[9] == "--exhaustive"
+    if args.len() != 9 && !exhaustive { return Err("usage: inspect OUTPUT_DIRECTORY ROW E0 E1 E2 D0 D1 D2 [--exhaustive]") }
     let row = args[2].parse_int().unwrap()
     var p = program.Plan(3) { encode: [0; 3], decode: [0; 3] }
     for i in 0..3 {
@@ -17,6 +18,10 @@ fn run() -> Result((), String) {
         p.decode[i] = args[6 + i].parse_int().unwrap()
     }
     if !model.well_formed(p) || row < 0 || row >= 3 { return Err("invalid representation") }
+    if exhaustive {
+        if !model.roundtrip(p, row) { return Err("round trip failed") }
+        return Ok(())
+    }
     let goal = model.goal(p, row)
     let proof = producer.certificate(p, row)
     fs.write_file((args[1] + "/theory.horn").as_str(), model.THEORY)?
