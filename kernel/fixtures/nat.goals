@@ -1,0 +1,1 @@
+(goal four-is-even (even (s (s (s (s z))))))

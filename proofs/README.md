@@ -13,8 +13,8 @@ copying a computed answer into the program.
 ## Next work and destination
 
 The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
-puts this library in the implementation queue. First make local negative
-cases run in CI without Horn. Then use induction and derivation reuse to
+puts this library in the implementation queue. Local negative cases now run
+in CI without Horn or Rust. Next use induction and derivation reuse to
 check a safety invariant for a finite state-transition table whose runtime
 adapter executes that exact table. Changed transitions and invalid induction
 assumptions must be rejected. Document the executable correspondence and
@@ -146,21 +146,25 @@ The source projects use Apache-2.0.
 
 ## Reproduce validation
 
-CI compiles and runs this example and the generated codec example with the
-packaged compiler on x86_64 and aarch64 Linux. To run that smoke check locally:
+CI runs the local acceptance/rejection suite, compile-time rejection cases,
+and optimized-IR erasure checks on x86_64 and aarch64 Linux. Run it locally:
 
 ```sh
-nix develop --command bash scripts/check-proof-experiments.sh out/jihoo
+nix develop --command python3 experimental/proofs/check.py --local --compiler out/jihoo
 ```
 
-The full differential and negative-certificate suite is separate:
+This needs Python, LLVM `opt` and the current compiler, without Horn or Rust.
+The full differential suite additionally compares cases without a known local
+verdict and successful report fields against the pinned reference:
 
 ```sh
-nix develop --command python3 experimental/proofs/check.py
+nix develop .#differential --command python3 experimental/proofs/check.py --horn ../horn
 ```
 
 This needs Python, Rust/Cargo, LLVM `opt`, and the sibling Horn checkout.
-`--compiler PATH` and `--horn PATH` override their defaults. Rust is used
+`--compiler PATH` and `--horn PATH` override their defaults. `--horn-revision`
+selects the required commit (the pinned revision above by default); mismatched
+commits and modified reference sources fail. Rust is used
 only for differential validation, not by the compile-time example.
 Generated binaries, exported inputs, failing cases, LLVM IR, and
 `report.json` go under `out/proofs`; the Horn checkout is read without

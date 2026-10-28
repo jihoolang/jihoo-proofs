@@ -23,10 +23,10 @@ The ground certificate rules and checks are unchanged.
 ## Next work and destination
 
 The first [roadmap milestone](../../docs/internals/roadmap.md#1-bring-the-existing-experiments-into-supported-use)
-prioritizes this checker as a reusable library. Extract local acceptance and
-rejection cases from differential tests so ordinary CI needs no sibling Horn
-checkout, retain a separately pinned differential suite, and stabilize the
-checking API and trust boundary. Migrate reusable modules into `lib/` and
+prioritizes this checker as a reusable library. Local acceptance and rejection
+cases now run in ordinary CI without Horn or Rust; the differential suite
+checks and records a pinned reference revision. Next stabilize the checking
+API and trust boundary. Migrate reusable modules into `lib/` and
 the CLI into an example, updating the codec and proof consumers together.
 Completion requires packaged imports without `-I experimental/...` and
 regression coverage on both supported targets.
@@ -68,7 +68,7 @@ nix develop --command jihoo build -O2 compiler/main.jh -o out/jihoo
 nix develop --command out/jihoo build experimental/kernel/main.jh -o out/kernel-check
 out/kernel-check ../horn/examples/nat.horn ../horn/examples/nat.goals ../horn/examples/nat.proof
 nix develop --command out/jihoo run experimental/kernel/comptime.jh
-nix develop --command python3 experimental/kernel/check.py
+nix develop --command python3 experimental/kernel/check.py --local
 ```
 
 The natural-number example reports one goal, three steps and eight distinct
@@ -77,10 +77,21 @@ initializer. An invalid certificate reaches an explicit `trap` during compilatio
 Large certificates remain subject to the interpreter's existing step, memory
 and recursion limits; this experiment does not raise those limits.
 
-`check.py` requires Python and Rust, and reads upstream Rust sources directly
-without modifying the Horn checkout. `--horn PATH` and `--compiler PATH`
-select other locations. All binaries, temporary cases and the Rust harness
-go under `out/kernel`. A failed case is retained for inspection. The suite
+`check.py --local` uses bundled natural-number fixtures and runs cases with
+independent expected verdicts, plus compile-time acceptance/rejection. It
+needs Python and the compiler, with no Horn or Rust dependency. Cases whose
+verdict needs the reference checker remain in the differential suite:
+
+```sh
+nix develop .#differential --command python3 experimental/kernel/check.py --horn ../horn
+```
+
+Differential validation reads upstream Rust sources without modifying the
+checkout. `--horn-revision` selects the required commit (the pinned revision
+above by default); mismatched commits and modified reference sources fail.
+`--compiler PATH` selects a compiler. Binaries, temporary cases, the Rust
+harness and `report.json` go under `out/kernel`. Failed inputs remain for
+inspection. The differential suite
 compares acceptance and every successful report field, with explicit expected
 verdicts for the security regressions. It covers mismatched assignments,
 unused invalid steps, result completeness, sorts, arities, malformed syntax,

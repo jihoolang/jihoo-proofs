@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the jihoo port with the original Rust kernel, including reports."""
+"""Run local kernel regressions or compare with a pinned Horn checkout."""
 import argparse
 import json
 import random
@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+HORN_REVISION = "18caf6d39088e1569beff678bc4461a28b8d2827"
 
 
 def run(*args):
@@ -20,10 +22,33 @@ def build(*args):
         raise RuntimeError(p.stderr.decode(errors="replace"))
 
 
-def cases(horn):
-    t = (horn / "examples/nat.horn").read_text()
-    g = (horn / "examples/nat.goals").read_text()
-    p = (horn / "examples/nat.proof").read_text()
+def reference_revision(horn, expected):
+    revision = subprocess.check_output(
+        ["git", "-C", str(horn), "rev-parse", "HEAD"], text=True).strip()
+    if revision != expected:
+        raise RuntimeError(f"Horn revision {revision} does not match requested {expected}")
+    result = run("git", "-C", str(horn), "diff", "--exit-code", "HEAD", "--",
+                 "src", "examples", "Cargo.toml", "Cargo.lock")
+    if result.returncode:
+        raise RuntimeError("Horn reference sources have local changes; use a clean pinned checkout")
+    return revision
+
+
+def check_local_result(result, expected, pattern, name, out):
+    ok = result.returncode == 0
+    valid_output = (re.fullmatch(pattern, result.stdout) is not None if ok
+                    else result.stderr.startswith(b"REJECT: "))
+    if result.returncode not in (0, 1) or ok != expected or not valid_output:
+        raise AssertionError(f"{name}: expected={expected}\n"
+                             f"jihoo ({result.returncode}): {result.stdout!r} {result.stderr!r}\n"
+                             f"Inputs retained in {out}")
+
+
+def cases(horn=None):
+    fixtures = horn / "examples" if horn is not None else HERE / "fixtures"
+    t = (fixtures / "nat.horn").read_text()
+    g = (fixtures / "nat.goals").read_text()
+    p = (fixtures / "nat.proof").read_text()
     yield "upstream nat", t, g, p, True
     compact = "(step 0 zero ()) (step 1 plus-two (0)) (step 2 plus-two (1)) (result four-is-even 2)"
     yield "inferred conclusions", t, g, compact, True
@@ -115,13 +140,53 @@ def cases(horn):
 
 def main():
     ap = argparse.ArgumentParser(__doc__)
-    ap.add_argument("--horn", type=Path, default=ROOT.parent / "horn")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--local", action="store_true", help="run expected-verdict cases without Horn or Rust")
+    mode.add_argument("--horn", type=Path, default=ROOT.parent / "horn")
+    ap.add_argument("--horn-revision", default=HORN_REVISION, help="required reference commit for differential checks")
     ap.add_argument("--compiler", type=Path, default=ROOT / "out/jihoo")
     args = ap.parse_args()
     horn = args.horn.resolve()
+    revision = None if args.local else reference_revision(horn, args.horn_revision)
     out = ROOT / "out/kernel"
     out.mkdir(parents=True, exist_ok=True)
     build(str(args.compiler.resolve()), "build", "experimental/kernel/main.jh", "-o", str(out / "jihoo-kernel"))
+    if not args.local:
+        build_reference(horn, out)
+    count = accepted = skipped = 0
+    for name, theory, goals, proof, expected in cases(None if args.local else horn):
+        if args.local and expected is None:
+            skipped += 1
+            continue
+        paths = [out / "case.horn", out / "case.goals", out / "case.proof"]
+        for path, content in zip(paths, [theory, goals, proof]):
+            path.write_bytes(content.encode() if isinstance(content, str) else content)
+        jihoo = run(str(out / "jihoo-kernel"), *map(str, paths))
+        if args.local:
+            check_local_result(jihoo, expected, rb"ACCEPT: \d+ goals, \d+ proof steps, \d+ bytes, \d+ distinct terms\n", name, out)
+            ok = jihoo.returncode == 0
+        else:
+            rust = run(str(out / "rust-kernel"), *map(str, paths))
+            ok = rust.returncode == 0
+            if rust.returncode not in [0, 1] or jihoo.returncode not in [0, 1] or (jihoo.returncode == 0) != ok or (ok and rust.stdout != jihoo.stdout) or (expected is not None and ok != expected):
+                raise AssertionError(f"{name}: expected={expected}\nRust ({rust.returncode}): {rust.stdout!r} {rust.stderr!r}\njihoo ({jihoo.returncode}): {jihoo.stdout!r} {jihoo.stderr!r}\nInputs retained in {out}")
+        count += 1
+        accepted += ok
+    build(str(args.compiler.resolve()), "run", "experimental/kernel/comptime.jh")
+    invalid = out / "invalid-comptime.jh"
+    invalid.write_text((HERE / "comptime.jh").read_text().replace("(step 2 plus-two (1))", "(step 2 plus-two (2))"))
+    rejected = run(str(args.compiler.resolve()), "build", str(invalid), "-I", "experimental/kernel", "-o", str(out / "invalid-comptime"))
+    if rejected.returncode == 0 or b"compile-time evaluation reached a trap" not in rejected.stderr:
+        raise AssertionError(f"invalid compile-time certificate was not rejected by the evaluator: {rejected.stderr!r}")
+    mode = "local" if args.local else "differential"
+    report = {"mode": mode, "horn_revision": revision, "cases": count,
+              "accepted": accepted, "rejected": count - accepted,
+              "differential_only_cases_skipped": skipped, "compile_time_negative_cases": 1}
+    (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(f"{count} {mode} cases passed ({accepted} accepted, {count - accepted} rejected); compile-time acceptance/rejection passed", flush=True)
+
+
+def build_reference(horn, out):
     modules = "\n".join(f"#[path = {json.dumps(str(horn / 'src' / (m + '.rs')))}] mod {m};" for m in ["kernel", "lex", "sexp"])
     reference = out / "reference.rs"
     reference.write_text("#![allow(dead_code)]\n" + modules + r'''
@@ -140,25 +205,6 @@ fn main() {
 }
 ''')
     build("rustc", "--edition=2024", "-O", str(reference), "-o", str(out / "rust-kernel"))
-    count = accepted = 0
-    for name, theory, goals, proof, expected in cases(horn):
-        paths = [out / "case.horn", out / "case.goals", out / "case.proof"]
-        for path, content in zip(paths, [theory, goals, proof]):
-            path.write_bytes(content.encode() if isinstance(content, str) else content)
-        rust = run(str(out / "rust-kernel"), *map(str, paths))
-        jihoo = run(str(out / "jihoo-kernel"), *map(str, paths))
-        ok = rust.returncode == 0
-        if rust.returncode not in [0, 1] or jihoo.returncode not in [0, 1] or (jihoo.returncode == 0) != ok or (ok and rust.stdout != jihoo.stdout) or (expected is not None and ok != expected):
-            raise AssertionError(f"{name}: expected={expected}\nRust ({rust.returncode}): {rust.stdout!r} {rust.stderr!r}\njihoo ({jihoo.returncode}): {jihoo.stdout!r} {jihoo.stderr!r}\nInputs retained in {out}")
-        count += 1
-        accepted += ok
-    build(str(args.compiler.resolve()), "run", "experimental/kernel/comptime.jh")
-    invalid = out / "invalid-comptime.jh"
-    invalid.write_text((ROOT / "experimental/kernel/comptime.jh").read_text().replace("(step 2 plus-two (1))", "(step 2 plus-two (2))"))
-    rejected = run(str(args.compiler.resolve()), "build", str(invalid), "-I", "experimental/kernel", "-o", str(out / "invalid-comptime"))
-    if rejected.returncode == 0 or b"compile-time evaluation reached a trap" not in rejected.stderr:
-        raise AssertionError(f"invalid compile-time certificate was not rejected by the evaluator: {rejected.stderr!r}")
-    print(f"{count} differential cases passed ({accepted} accepted, {count - accepted} rejected); compile-time acceptance/rejection passed")
 
 
 if __name__ == "__main__":

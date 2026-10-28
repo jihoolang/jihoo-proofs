@@ -142,9 +142,8 @@ scalability or C performance claim follows from this experiment.
 
 ## Validation
 
-CI compiles and runs the proof and codec examples with the packaged compiler
-on x86_64 and aarch64 Linux using `scripts/check-proof-experiments.sh`.
-The exhaustive and negative-case suite below is run separately:
+CI runs this exhaustive and negative-case suite on x86_64 and aarch64 Linux
+through `scripts/check-experiments.py`. To run just the codec checks:
 
 ```sh
 nix develop --command python3 experimental/verified-codec/check.py

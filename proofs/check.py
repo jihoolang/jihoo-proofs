@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the proof experiment against Horn, including adversarial certificates."""
+"""Run local proof regressions or compare with a pinned Horn checkout."""
 import argparse
 import importlib.util
 import json
@@ -105,10 +105,17 @@ def schematic_cases(theory, goals, proof):
 
 def main():
     ap = argparse.ArgumentParser(__doc__)
-    ap.add_argument("--horn", type=Path, default=ROOT.parent / "horn")
+    spec = importlib.util.spec_from_file_location("ground_cases", ROOT / "experimental/kernel/check.py")
+    ground = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ground)
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--local", action="store_true", help="run expected-verdict cases without Horn or Rust")
+    mode.add_argument("--horn", type=Path, default=ROOT.parent / "horn")
+    ap.add_argument("--horn-revision", default=ground.HORN_REVISION, help="required reference commit for differential checks")
     ap.add_argument("--compiler", type=Path, default=ROOT / "out/jihoo")
     args = ap.parse_args()
     horn, compiler = args.horn.resolve(), args.compiler.resolve()
+    revision = None if args.local else ground.reference_revision(horn, args.horn_revision)
     out = ROOT / "out/proofs"
     out.mkdir(parents=True, exist_ok=True)
     include = ROOT / "experimental/kernel"
@@ -125,16 +132,17 @@ def main():
     definitions = [line for line in (out / "example.opt.ll").read_text().splitlines() if line.startswith("define ")]
     assert not any(any(name in line for name in ["schematic.", "syntax.", "proofs.", "nat.", "main.verify."]) for line in definitions), definitions
     require(out / "export", out)
-    require("cargo", "build", "--offline", "--locked", "--release", "--manifest-path", horn / "Cargo.toml", "--target-dir", out / "rust", "--bin", "schematic-kernel")
+    if not args.local:
+        require("cargo", "build", "--offline", "--locked", "--release", "--manifest-path", horn / "Cargo.toml", "--target-dir", out / "rust", "--bin", "schematic-kernel")
     rust = out / "rust/release/schematic-kernel"
 
-    spec = importlib.util.spec_from_file_location("ground_cases", ROOT / "experimental/kernel/check.py")
-    ground = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(ground)
     theory, goals, proof = [(out / name).read_text() for name in ["theory.horn", "goals", "proof"]]
-    cases = [*ground.cases(horn), *schematic_cases(theory, goals, proof)]
-    count = accepted = 0
+    cases = [*ground.cases(None if args.local else horn), *schematic_cases(theory, goals, proof)]
+    count = accepted = skipped = 0
     for name, t, g, p, expected in cases:
+        if args.local and expected is None:
+            skipped += 1
+            continue
         # The experiment uses trees, not the ground kernel's shared DAG.
         # Keep the same shared-definition regression at a bounded tree size.
         if name == "arena growth and shared DAG":
@@ -144,13 +152,17 @@ def main():
         paths = [out / "case.horn", out / "case.goals", out / "case.proof"]
         for path, content in zip(paths, [t, g, p]):
             path.write_bytes(content.encode() if isinstance(content, str) else content)
-        reference = run(rust, *paths)
         candidate = run(out / "schematic-check", *paths)
-        ok = reference.returncode == 0
-        match = re.fullmatch(rb"ACCEPT (\d+) goals \((\d+) open\), (\d+) steps, (\d+) hypotheses, (\d+) inductions, (\d+) instance references\n", reference.stdout)
-        same_report = not ok or (match is not None and candidate.stdout == b"ACCEPT " + b" ".join(match.groups()) + b"\n")
-        if reference.returncode not in [0, 1] or candidate.returncode not in [0, 1] or (candidate.returncode == 0) != ok or not same_report or (expected is not None and ok != expected):
-            raise AssertionError(f"{name}: expected={expected}\nRust ({reference.returncode}): {reference.stdout!r} {reference.stderr!r}\njihoo ({candidate.returncode}): {candidate.stdout!r} {candidate.stderr!r}\nInputs retained in {out}")
+        if args.local:
+            ground.check_local_result(candidate, expected, rb"ACCEPT \d+ \d+ \d+ \d+ \d+ \d+\n", name, out)
+            ok = candidate.returncode == 0
+        else:
+            reference = run(rust, *paths)
+            ok = reference.returncode == 0
+            match = re.fullmatch(rb"ACCEPT (\d+) goals \((\d+) open\), (\d+) steps, (\d+) hypotheses, (\d+) inductions, (\d+) instance references\n", reference.stdout)
+            same_report = not ok or (match is not None and candidate.stdout == b"ACCEPT " + b" ".join(match.groups()) + b"\n")
+            if reference.returncode not in [0, 1] or candidate.returncode not in [0, 1] or (candidate.returncode == 0) != ok or not same_report or (expected is not None and ok != expected):
+                raise AssertionError(f"{name}: expected={expected}\nRust ({reference.returncode}): {reference.stdout!r} {reference.stderr!r}\njihoo ({candidate.returncode}): {candidate.stdout!r} {candidate.stderr!r}\nInputs retained in {out}")
         count += 1
         accepted += ok
 
@@ -170,9 +182,14 @@ def main():
         result = run(compiler, "build", source, "-I", HERE, "-I", include, "-o", out / f"invalid-{name}")
         if result.returncode == 0 or b"compile-time evaluation reached a trap" not in result.stderr:
             raise AssertionError(f"changed {name} was not rejected during compile-time checking: {result.stderr!r}")
-    report = {"differential_cases": count, "accepted": accepted, "rejected": count - accepted, "compile_time_negative_cases": len(changes), "shared_definition_depth": 95, "optimized_runtime_verifier_functions": 0}
+    mode = "local" if args.local else "differential"
+    report = {"mode": mode, "horn_revision": revision, "cases": count,
+              "accepted": accepted, "rejected": count - accepted,
+              "differential_only_cases_skipped": skipped,
+              "compile_time_negative_cases": len(changes), "shared_definition_depth": 95,
+              "optimized_runtime_verifier_functions": 0}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"{count} differential cases passed ({accepted} accepted, {count - accepted} rejected); compile-time acceptance and {len(changes)} rejection cases passed")
+    print(f"{count} {mode} cases passed ({accepted} accepted, {count - accepted} rejected); compile-time acceptance and {len(changes)} rejection cases passed", flush=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+; Horn example at 18caf6d39088e1569beff678bc4461a28b8d2827, Apache-2.0.
+; Derivability of even natural numbers, using free constructor syntax.
+(sort Nat)
+(ctor z () Nat)
+(ctor s (Nat) Nat)
+(pred even (Nat))
+(rule zero () (even z))
+(rule plus-two ((even ?n)) (even (s (s ?n))))

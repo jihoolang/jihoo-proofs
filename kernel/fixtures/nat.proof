@@ -1,0 +1,4 @@
+(step 0 zero () (even z))
+(step 1 plus-two (0) (even (s (s z))))
+(step 2 plus-two (1) (even (s (s (s (s z))))))
+(result four-is-even 2)
