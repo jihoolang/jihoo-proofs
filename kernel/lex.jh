@@ -28,7 +28,12 @@ impl(R: io.BufRead) Lexer(R) {
             if start == self.line.len() {
                 self.line.clear()
                 self.pos = 0
-                let n = self.input.read_line(&self.line)?
+                // `read_line` fails with a `String` up to jihoo 0.2 and an
+                // `os.Error` after; both have `to_string`.
+                let n = match self.input.read_line(&self.line) {
+                    Ok(n) => n
+                    Err(e) => return Err(e.to_string())
+                }
                 if n == 0 { return Ok(None) }
                 self.count += n as u64
                 continue

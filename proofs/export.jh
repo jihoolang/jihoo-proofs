@@ -4,14 +4,23 @@ import std.fs
 import std.sys
 import nat
 
+// The standard library's file errors are `String`s up to jihoo 0.2 and
+// `os.Error`s after; both have `to_string`.
+fn text(comptime T: type, comptime E: type, sink r: Result(T, E)) -> Result(T, String) {
+    match r {
+        Ok(v) => Ok(v)
+        Err(e) => Err(e.to_string())
+    }
+}
+
 fn run() -> Result((), String) {
     let args = env.args()
     if args.len() != 2 { return Err("usage: export OUTPUT_DIRECTORY") }
     let p = nat.development()
     p.check()?
-    fs.write_file((args[1] + "/theory.horn").as_str(), p.theory())?
-    fs.write_file((args[1] + "/goals").as_str(), p.goals().as_str())?
-    fs.write_file((args[1] + "/proof").as_str(), p.certificate())?
+    text(fs.write_file((args[1] + "/theory.horn").as_str(), p.theory()))?
+    text(fs.write_file((args[1] + "/goals").as_str(), p.goals().as_str()))?
+    text(fs.write_file((args[1] + "/proof").as_str(), p.certificate()))?
     Ok(())
 }
 

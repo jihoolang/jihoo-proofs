@@ -7,6 +7,15 @@ import model
 import producer
 import kernel
 
+// The standard library's file errors are `String`s up to jihoo 0.2 and
+// `os.Error`s after; both have `to_string`.
+fn text(comptime T: type, comptime E: type, sink r: Result(T, E)) -> Result(T, String) {
+    match r {
+        Ok(v) => Ok(v)
+        Err(e) => Err(e.to_string())
+    }
+}
+
 fn run() -> Result((), String) {
     let args = env.args()
     let exhaustive = args.len() == 10 && args[9] == "--exhaustive"
@@ -24,9 +33,9 @@ fn run() -> Result((), String) {
     }
     let goal = model.goal(p, row)
     let proof = producer.certificate(p, row)
-    fs.write_file((args[1] + "/theory.horn").as_str(), model.THEORY)?
-    fs.write_file((args[1] + "/goals").as_str(), goal.as_str())?
-    fs.write_file((args[1] + "/proof").as_str(), proof.as_str())?
+    text(fs.write_file((args[1] + "/theory.horn").as_str(), model.THEORY))?
+    text(fs.write_file((args[1] + "/goals").as_str(), goal.as_str()))?
+    text(fs.write_file((args[1] + "/proof").as_str(), proof.as_str()))?
     let th = kernel.Theory.parse(model.THEORY)?
     th.check(goal.as_str(), proof.as_str())?
     Ok(())

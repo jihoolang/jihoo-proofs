@@ -4,12 +4,21 @@ import std.fs
 import std.sys
 import schematic
 
+// The standard library's file errors are `String`s up to jihoo 0.2 and
+// `os.Error`s after; both have `to_string`.
+fn text(comptime T: type, comptime E: type, sink r: Result(T, E)) -> Result(T, String) {
+    match r {
+        Ok(v) => Ok(v)
+        Err(e) => Err(e.to_string())
+    }
+}
+
 fn run() -> Result(schematic.Report, String) {
     let args = env.args()
     if args.len() != 4 { return Err("usage: schematic-check THEORY GOALS PROOF") }
-    let theory = fs.read_file(args[1])?
-    let goals = fs.read_file(args[2])?
-    let proof = fs.read_file(args[3])?
+    let theory = text(fs.read_file(args[1]))?
+    let goals = text(fs.read_file(args[2]))?
+    let proof = text(fs.read_file(args[3]))?
     schematic.check(theory.as_str(), goals.as_str(), proof.as_str())
 }
 
