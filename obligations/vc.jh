@@ -5,6 +5,8 @@ import linear
 pub enum Operand {
     Local(i64)
     Const(i128)
+    // A value the model does not follow.
+    Opaque
 }
 
 pub enum Cmp {
@@ -21,7 +23,15 @@ pub enum Rvalue {
     // `+` and `-` trap on overflow (the debug build's MIR `Bin`, checked).
     Add(Operand, Operand)
     Sub(Operand, Operand)
+    // Linear only when one side is a constant.
+    Mul(Operand, Operand)
     Compare(Cmp, Operand, Operand)
+    // `!b` and `a && b` on bools.
+    Not(Operand)
+    And(Operand, Operand)
+    // An integer cast to the destination's type: the same value when the
+    // source's range fits, `i64` to `u64` read modulo 2^64.
+    Cast(Operand)
     // MIR's bounds check: `a as u64 < b as u64` with `b` a length, which is
     // `0 <= a && a < b` because a length is never negative.
     InBounds(Operand, Operand)
@@ -38,8 +48,15 @@ pub enum Term {
     Goto(i64)
     // MIR's `switch _b [0 => zero; else other]` on a bool.
     Switch(i64, i64, i64)
-    // `assert _b, msg -> next`.
+    // `assert _b, msg -> next`; a negative local is a condition the model
+    // does not follow.
     Assert(i64, String, i64)
+    // Any of the blocks (a `switch` the model does not follow).
+    Any(Vec(i64))
+    // A call whose result goes to the local (none if negative), then the block.
+    Call(i64, i64)
+    // The program stops on purpose (`panic`, `trap()`).
+    Trap
     Return
     Unreachable
 }
@@ -93,6 +110,8 @@ pub struct Obligation {
 enum Sym {
     Num(linear.Lin)
     Bool(Vec(Fact2))
+    // An `i64` cast to `u64`: the form's value modulo 2^64.
+    Wrapped(linear.Lin)
     Unknown
 }
 
@@ -115,6 +134,7 @@ struct Path {
 fn clone_sym(s: Sym) -> Sym {
     match s {
         Num(l) => Sym.Num(l.clone())
+        Wrapped(l) => Sym.Wrapped(l.clone())
         Bool(cs) => {
             var out = Vec(Fact2).new()
             for c in cs { out.push(Fact2 { op: c.op, a: c.a.clone(), b: c.b.clone() }) }
@@ -135,9 +155,9 @@ fn operand(p: Path, o: Operand) -> Option(linear.Lin) {
         Const(c) => Some(linear.Lin.num(c))
         Local(l) => match p.state[l] {
             Num(x) => Some(x.clone())
-            Bool(_) => None
-            Unknown => None
+            _ => None
         }
+        Opaque => None
     }
 }
 
@@ -202,6 +222,12 @@ impl Gen {
             what: "bb" + p.block.to_string() + ": " + what
             goal: linear.Goal { facts, claim }
         })
+    }
+
+    // A check the model cannot state: `-1 >= 0`, proved only if the path
+    // cannot be taken.
+    fn unknown(inout self, f: Function, p: Path, what: str) {
+        self.obligation(f, p, what, linear.Lin.num(-1))
     }
 
     // Each linear part of `c` must hold on this path.
@@ -282,42 +308,159 @@ fn holds(inout g: Gen, f: Function, p: Path, what: str, facts: [Fact]) {
     }
 }
 
+fn single(sink x: Fact2) -> Sym {
+    var cs = Vec(Fact2).new()
+    cs.push(x)
+    Sym.Bool(cs)
+}
+
+fn clone_facts(cs: [Fact2]) -> Vec(Fact2) {
+    var out = Vec(Fact2).new()
+    for c in cs { out.push(Fact2 { op: c.op, a: c.a.clone(), b: c.b.clone() }) }
+    out
+}
+
+// The form is always in [0, max]: a constant, or a variable whose range is.
+fn within(p: Path, x: linear.Lin, max: i128) -> bool {
+    if x.is_constant() { return x.constant >= 0 && x.constant <= max }
+    if x.constant != 0 { return false }
+    var var_ = -1
+    for v in 0..x.vars() {
+        let c = x.coef(v)
+        if c != 0 {
+            if c != 1 || var_ >= 0 { return false }
+            var_ = v
+        }
+    }
+    match p.ranges[var_] {
+        Int(lo, hi) => lo >= 0 && hi <= max
+        Other => false
+    }
+}
+
+fn kind_of(f: Function, o: Operand) -> Option((i128, i128)) {
+    match o {
+        Local(l) => match f.locals[l].kind {
+            Int(lo, hi) => Some((lo, hi))
+            Other => None
+        }
+        Const(c) => Some((c, c))
+        Opaque => None
+    }
+}
+
+fn cast(f: Function, p: Path, dst: i64, o: Operand) -> Sym {
+    let Int(lo, hi) = f.locals[dst].kind else { return Sym.Unknown }
+    let Some(src) = kind_of(f, o) else { return Sym.Unknown }
+    let Some(x) = operand(p, o) else { return Sym.Unknown }
+    if src.0 >= lo && src.1 <= hi { return Sym.Num(x) }
+    let i64_min: i128 = 0 - (1 << 63)
+    let u64_max: i128 = (1 << 64) - 1
+    if src.0 == i64_min && src.1 == 0 - i64_min - 1 && lo == 0 && hi == u64_max {
+        return Sym.Wrapped(x)
+    }
+    Sym.Unknown
+}
+
+fn compare(p: Path, op: Cmp, a: Operand, b: Operand) -> Sym {
+    match (operand(p, a), operand(p, b)) {
+        (Some(x), Some(y)) => return single(Fact2 { op, a: x, b: y })
+        _ => {}
+    }
+    // `x as u64 < y` with `0 <= y < 2^63` is `0 <= x && x < y`: a negative
+    // `x` becomes at least 2^63, more than any such `y`. `y` is a `u64` in
+    // that range, or an `i64` that is not negative, cast too.
+    let i64_max: i128 = (1 << 63) - 1
+    let Local(i) = a else { return Sym.Unknown }
+    let Local(j) = b else { return Sym.Unknown }
+    let Wrapped(x) = p.state[i] else { return Sym.Unknown }
+    let y = match p.state[j] {
+        Wrapped(y) => y.clone()
+        Num(y) => y.clone()
+        _ => return Sym.Unknown
+    }
+    match op {
+        Lt => {}
+        _ => return Sym.Unknown
+    }
+    if !within(p, y, i64_max) { return Sym.Unknown }
+    var cs = Vec(Fact2).new()
+    cs.push(Fact2 { op: Cmp.Ge, a: x.clone(), b: linear.Lin.num(0) })
+    cs.push(Fact2 { op: Cmp.Lt, a: x.clone(), b: y.clone() })
+    Sym.Bool(cs)
+}
+
+fn bools(p: Path, o: Operand) -> Option(Vec(Fact2)) {
+    let Local(l) = o else { return None }
+    match p.state[l] {
+        Bool(cs) => Some(clone_facts(cs.as_slice()))
+        _ => None
+    }
+}
+
+// The result of `+ - *` must fit the destination; a result the model cannot
+// state gives a check that cannot be proved.
+fn arithmetic(inout g: Gen, f: Function, p: Path, dst: i64, sink r: Option(linear.Lin)) -> Sym {
+    let Int(lo, hi) = f.locals[dst].kind else { return Sym.Unknown }
+    match r {
+        Some(x) => {
+            g.obligation(f, p, "no overflow", x.shift(-lo))
+            g.obligation(f, p, "no overflow", x.scale(-1).shift(hi))
+            Sym.Num(x)
+        }
+        None => {
+            g.unknown(f, p, "no overflow")
+            Sym.Unknown
+        }
+    }
+}
+
 fn assign(inout g: Gen, f: Function, inout p: Path, dst: i64, rv: Rvalue) {
     let value = match rv {
         Use(o) => match o {
             Local(l) => clone_sym(p.state[l])
             Const(c) => Sym.Num(linear.Lin.num(c))
+            Opaque => Sym.Unknown
         }
-        Add(a, b) | Sub(a, b) => {
-            match (operand(p, a), operand(p, b)) {
-                (Some(x), Some(y)) => {
-                    let r = match rv {
-                        Add(_, _) => x.plus(y)
-                        _ => x.minus(y)
-                    }
-                    match f.locals[dst].kind {
-                        Int(lo, hi) => {
-                            g.obligation(f, p, "no overflow", r.shift(-lo))
-                            g.obligation(f, p, "no overflow", r.scale(-1).shift(hi))
-                        }
-                        Other => {}
-                    }
-                    Sym.Num(r)
-                }
-                _ => {
-                    g.errors.push(f.name.as_str() + ": bb" + p.block.to_string() + ": arithmetic on an unknown value")
-                    Sym.Unknown
-                }
+        Add(a, b) => {
+            let r = match (operand(p, a), operand(p, b)) {
+                (Some(x), Some(y)) => Some(x.plus(y))
+                _ => None
             }
+            arithmetic(&g, f, p, dst, r)
         }
-        Compare(op, a, b) => match (operand(p, a), operand(p, b)) {
+        Sub(a, b) => {
+            let r = match (operand(p, a), operand(p, b)) {
+                (Some(x), Some(y)) => Some(x.minus(y))
+                _ => None
+            }
+            arithmetic(&g, f, p, dst, r)
+        }
+        Mul(a, b) => {
+            let r = match (operand(p, a), operand(p, b)) {
+                (Some(x), Some(y)) => if y.is_constant() {
+                    Some(x.scale(y.constant))
+                } else if x.is_constant() { Some(y.scale(x.constant)) } else { None }
+                _ => None
+            }
+            arithmetic(&g, f, p, dst, r)
+        }
+        Compare(op, a, b) => compare(p, op, a, b)
+        Not(a) => match bools(p, a) {
+            Some(cs) => if cs.len() == 1 {
+                single(Fact2 { op: negate(cs[0].op), a: cs[0].a.clone(), b: cs[0].b.clone() })
+            } else { Sym.Unknown }
+            None => Sym.Unknown
+        }
+        And(a, b) => match (bools(p, a), bools(p, b)) {
             (Some(x), Some(y)) => {
-                var cs = Vec(Fact2).new()
-                cs.push(Fact2 { op, a: x, b: y })
+                var cs = x
+                for c in y { cs.push(Fact2 { op: c.op, a: c.a.clone(), b: c.b.clone() }) }
                 Sym.Bool(cs)
             }
             _ => Sym.Unknown
         }
+        Cast(o) => cast(f, p, dst, o)
         InBounds(i, n) => match (operand(p, i), operand(p, n)) {
             (Some(x), Some(y)) => {
                 var cs = Vec(Fact2).new()
@@ -329,6 +472,12 @@ fn assign(inout g: Gen, f: Function, inout p: Path, dst: i64, rv: Rvalue) {
         }
         Opaque => Sym.Unknown
     }
+    havoc_or(&p, f, dst, value)
+}
+
+// Gives the local the value, or a fresh variable in its range when the
+// value is unknown.
+fn havoc_or(inout p: Path, f: Function, dst: i64, sink value: Sym) {
     match value {
         Unknown => match f.locals[dst].kind {
             Int(_, _) => {
@@ -402,7 +551,8 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
             }
             Assert(c, msg, next) => {
                 var q = clone_path(p, next)
-                match p.state[c] {
+                let cond = if c >= 0 { clone_sym(p.state[c]) } else { Sym.Unknown }
+                match cond {
                     Bool(cs) => {
                         for x in cs {
                             let fx = Fact2 { op: x.op, a: x.a.clone(), b: x.b.clone() }
@@ -410,10 +560,19 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
                             assume(&q, Fact2 { op: x.op, a: x.a.clone(), b: x.b.clone() })
                         }
                     }
-                    _ => g.errors.push(f.name.as_str() + ": bb" + p.block.to_string() + ": " + msg.as_str() + ": unknown condition")
+                    _ => g.unknown(f, p, msg.as_str())
                 }
                 work.push(q)
             }
+            Any(targets) => {
+                for t in targets { work.push(clone_path(p, t)) }
+            }
+            Call(dst, next) => {
+                var q = clone_path(p, next)
+                if dst >= 0 { havoc_or(&q, f, dst, Sym.Unknown) }
+                work.push(q)
+            }
+            Trap => {}
             Return => holds(&g, f, p, "ensures", f.ensures.as_slice())
             Unreachable => g.errors.push(
                 f.name.as_str() + ": bb" + p.block.to_string() + " is reached"

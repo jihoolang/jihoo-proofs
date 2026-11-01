@@ -1,0 +1,10 @@
+; `last`'s xs.len is local 13 and its loop head bb1; `after_call`'s `n`
+; is local 1.
+(contract last
+  (invariant 1 (le (const 0) (local 3))))
+(contract after_call
+  (requires (le (local 1) (const 10)))
+  (ensures (le (local 0) (const 10))))
+(contract scale
+  (requires (le (const 0) (local 1)) (le (local 1) (const 1000)))
+  (ensures (le (local 0) (const 4000))))

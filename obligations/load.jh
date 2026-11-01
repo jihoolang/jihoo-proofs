@@ -1,0 +1,212 @@
+// Reads `jihoo emit-obligations` output into the model, and contracts
+// (requires, ensures, loop invariants) from a file of their own until jihoo
+// has syntax for them. Reading is trusted: it is part of the semantics.
+import sexp
+import vc
+
+fn int(x: sexp.Sexp) -> Result(i128, String) {
+    let text = x.atom()?
+    var v: i128 = 0
+    var negative = false
+    var i = 0
+    if text.len > 0 && text.as_bytes()[0] == '-' {
+        negative = true
+        i = 1
+    }
+    if i == text.len { return Err("expected an integer, found `" + text + "`") }
+    while i < text.len {
+        let c = text.as_bytes()[i]
+        if c < '0' || c > '9' { return Err("expected an integer, found `" + text + "`") }
+        // Negative accumulation reaches the most negative i128.
+        let min: i128 = 0 - (1 << 126) - (1 << 126)
+        let d = (c - '0') as i128
+        if v < min / 10 || v * 10 < min + d { return Err("`" + text + "` does not fit an i128") }
+        v = v * 10 - d
+        i += 1
+    }
+    if !negative && v == 0 - (1 << 126) - (1 << 126) { return Err(
+        "`" + text + "` does not fit an i128"
+    ) }
+    Ok(if negative { v } else { 0 - v })
+}
+
+fn index(x: sexp.Sexp) -> Result(i64, String) { Ok(int(x)? as i64) }
+
+fn head(x: sexp.Sexp, name: str, n: i64) -> Result([sexp.Sexp], String) {
+    let xs = x.list()?
+    if xs.len != n + 1 || xs[0].atom()? != name {
+        return Err("expected (" + name + " ...) with " + n.to_string() + " parts")
+    }
+    Ok(xs[1..xs.len])
+}
+
+fn tag(x: sexp.Sexp) -> Result(str, String) {
+    match x {
+        Atom(a) => Ok(a.as_str())
+        List(xs) => if xs.len() > 0 { xs[0].atom() } else { Err("empty form") }
+    }
+}
+
+fn operand(x: sexp.Sexp) -> Result(vc.Operand, String) {
+    match tag(x)? {
+        "opaque" => Ok(vc.Operand.Opaque)
+        "local" => Ok(vc.Operand.Local(index(head(x, "local", 1)?[0])?))
+        "const" => Ok(vc.Operand.Const(int(head(x, "const", 1)?[0])?))
+        t => Err("unknown operand `" + t + "`")
+    }
+}
+
+fn cmp(name: str) -> Result(vc.Cmp, String) {
+    match name {
+        "lt" => Ok(vc.Cmp.Lt)
+        "le" => Ok(vc.Cmp.Le)
+        "gt" => Ok(vc.Cmp.Gt)
+        "ge" => Ok(vc.Cmp.Ge)
+        "eq" => Ok(vc.Cmp.Eq)
+        "ne" => Ok(vc.Cmp.Ne)
+        _ => Err("unknown comparison `" + name + "`")
+    }
+}
+
+fn rvalue(x: sexp.Sexp) -> Result(vc.Rvalue, String) {
+    let t = tag(x)?
+    if t == "opaque" { return Ok(vc.Rvalue.Opaque) }
+    let xs = x.list()?
+    match t {
+        "use" => Ok(vc.Rvalue.Use(operand(head(x, "use", 1)?[0])?))
+        "add" => Ok(vc.Rvalue.Add(operand(head(x, "add", 2)?[0])?, operand(xs[2])?))
+        "sub" => Ok(vc.Rvalue.Sub(operand(head(x, "sub", 2)?[0])?, operand(xs[2])?))
+        "mul" => Ok(vc.Rvalue.Mul(operand(head(x, "mul", 2)?[0])?, operand(xs[2])?))
+        "and" => Ok(vc.Rvalue.And(operand(head(x, "and", 2)?[0])?, operand(xs[2])?))
+        "not" => Ok(vc.Rvalue.Not(operand(head(x, "not", 1)?[0])?))
+        "cast" => Ok(vc.Rvalue.Cast(operand(head(x, "cast", 1)?[0])?))
+        "cmp" => {
+            let ps = head(x, "cmp", 3)?
+            Ok(vc.Rvalue.Compare(cmp(ps[0].atom()?)?, operand(ps[1])?, operand(ps[2])?))
+        }
+        _ => Err("unknown value `" + t + "`")
+    }
+}
+
+fn term(x: sexp.Sexp) -> Result(vc.Term, String) {
+    let t = tag(x)?
+    let xs = x.list()?
+    match t {
+        "goto" => Ok(vc.Term.Goto(index(head(x, "goto", 1)?[0])?))
+        "switch" => {
+            let ps = head(x, "switch", 3)?
+            Ok(vc.Term.Switch(index(ps[0])?, index(ps[1])?, index(ps[2])?))
+        }
+        "assert" => {
+            let ps = head(x, "assert", 3)?
+            let c = match operand(ps[0])? {
+                Local(l) => l
+                _ => -1
+            }
+            Ok(vc.Term.Assert(c, ps[1].atom()?.to_string(), index(ps[2])?))
+        }
+        "any" => {
+            var bs = Vec(i64).new()
+            for i in 1..xs.len { bs.push(index(xs[i])?) }
+            Ok(vc.Term.Any(bs))
+        }
+        "call" => {
+            let ps = head(x, "call", 2)?
+            let dst = if ps[0].atom()? == "_" { -1 } else { index(ps[0])? }
+            Ok(vc.Term.Call(dst, index(ps[1])?))
+        }
+        "trap" => Ok(vc.Term.Trap)
+        "return" => Ok(vc.Term.Return)
+        "unreachable" => Ok(vc.Term.Unreachable)
+        _ => Err("unknown terminator `" + t + "`")
+    }
+}
+
+fn kind(x: sexp.Sexp) -> Result(vc.Kind, String) {
+    match tag(x)? {
+        // A range beyond i128 (`u128`) is not followed.
+        "int" => {
+            let ps = head(x, "int", 2)?
+            match (int(ps[0]), int(ps[1])) {
+                (Ok(lo), Ok(hi)) => Ok(vc.Kind.Int(lo, hi))
+                _ => Ok(vc.Kind.Other)
+            }
+        }
+        "bool" | "other" => Ok(vc.Kind.Other)
+        t => Err("unknown kind `" + t + "`")
+    }
+}
+
+fn function(x: sexp.Sexp) -> Result(vc.Function, String) {
+    let xs = x.list()?
+    if xs.len < 5 || xs[0].atom()? != "function" { return Err("expected (function ...)") }
+    var locals = Vec(vc.Decl).new()
+    let ks = xs[4].list()?
+    for i in 1..ks.len {
+        locals.push(vc.Decl { name: "_" + (i - 1).to_string(), kind: kind(ks[i])? })
+    }
+    var blocks = Vec(vc.Block).new()
+    for j in 6..xs.len {
+        let bs = xs[j].list()?
+        if bs.len < 3 || bs[0].atom()? != "block" || index(bs[1])? != blocks.len() {
+            return Err("expected (block " + blocks.len().to_string() + " ...)")
+        }
+        var stmts = Vec(vc.Stmt).new()
+        for k in 2..bs.len - 1 {
+            let ps = head(bs[k], "set", 2)?
+            stmts.push(vc.Stmt.Assign(index(ps[0])?, rvalue(ps[1])?))
+        }
+        blocks.push(vc.Block { stmts, term: term(bs[bs.len - 1])? })
+    }
+    Ok(vc.Function {
+        name: xs[1].atom()?.to_string()
+        locals
+        blocks
+        requires: Vec(vc.Fact).new()
+        ensures: Vec(vc.Fact).new()
+        invariants: Vec((i64, Vec(vc.Fact))).new()
+    })
+}
+
+pub fn functions(text: str) -> Result(Vec(vc.Function), String) {
+    var out = Vec(vc.Function).new()
+    for x in sexp.parse(text)? { out.push(function(x)?) }
+    Ok(out)
+}
+
+fn facts(xs: [sexp.Sexp]) -> Result(Vec(vc.Fact), String) {
+    var out = Vec(vc.Fact).new()
+    for x in xs {
+        let ps = x.list()?
+        if ps.len != 3 { return Err("expected (op a b)") }
+        out.push(vc.fact(cmp(ps[0].atom()?)?, operand(ps[1])?, operand(ps[2])?))
+    }
+    Ok(out)
+}
+
+// `(contract NAME (requires F...) (ensures F...) (invariant BLOCK F...)...)`
+// adds to the function of that name; the names of the others are returned.
+pub fn contracts(text: str, inout fs: Vec(vc.Function)) -> Result(Vec(String), String) {
+    var names = Vec(String).new()
+    for x in sexp.parse(text)? {
+        let xs = x.list()?
+        if xs.len < 2 || xs[0].atom()? != "contract" { return Err("expected (contract ...)") }
+        let name = xs[1].atom()?
+        var found = -1
+        for i in 0..fs.len() {
+            if fs[i].name == name { found = i }
+        }
+        if found < 0 { return Err("no function `" + name + "`") }
+        names.push(name.to_string())
+        for j in 2..xs.len {
+            let ps = xs[j].list()?
+            match ps[0].atom()? {
+                "requires" => fs[found].requires = facts(ps[1..ps.len])?
+                "ensures" => fs[found].ensures = facts(ps[1..ps.len])?
+                "invariant" => fs[found].invariants.push((index(ps[1])?, facts(ps[2..ps.len])?))
+                t => return Err("unknown contract part `" + t + "`")
+            }
+        }
+    }
+    Ok(names)
+}

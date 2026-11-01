@@ -1,0 +1,31 @@
+// Verifies the functions a contracts file names, from `emit-obligations`
+// output: `emitted <obligations> <contracts>`.
+import std.env
+import std.fs
+import load
+import verify
+
+fn read(path: str) -> String {
+    match fs.read_file(path) {
+        Ok(s) => s
+        Err(e) => panic(("cannot read " + path + ": " + e.to_string().as_str()).as_str())
+    }
+}
+
+fn main() {
+    let args = env.args()
+    if args.len() != 3 { panic("usage: emitted <obligations> <contracts>") }
+    var fs = match load.functions(read(args[1]).as_str()) {
+        Ok(fs) => fs
+        Err(e) => panic(e.as_str())
+    }
+    let names = match load.contracts(read(args[2]).as_str(), &fs) {
+        Ok(n) => n
+        Err(e) => panic(e.as_str())
+    }
+    for f in fs {
+        for n in names {
+            if f.name == n { print(verify.verify(f).text()) }
+        }
+    }
+}

@@ -19,14 +19,32 @@ prover:
    nothing itself.
 
 `models.jh` holds two functions' MIR exactly as `jihoo emit-mir` printed it
-(0.4.2, debug build), written in the model by hand.
+(0.4.2, debug build), written in the model by hand. A compiler with
+`emit-obligations` (after 0.4.2) prints the model itself: `load.jh` reads
+it, and `emitted.jh` verifies the functions that a contracts file names.
+Contracts live in such files (`samples/*.contracts`) until jihoo has syntax
+for them, and name MIR's local and block numbers.
 
 ## Try it
 
 ```sh
 jihoo test -I obligations obligations/tests.jh       # rejection cases, at runtime
 jihoo run -I obligations obligations/example.jh      # everything at compile time
-python3 obligations/check.py                         # both, with a report
+jihoo emit-obligations obligations/samples/bugs.jh > out/bugs.obligations
+jihoo run -I obligations -I kernel obligations/emitted.jh -- \
+    out/bugs.obligations obligations/samples/bugs.contracts
+python3 obligations/check.py                         # all of these, with a report
+```
+
+From the compiler's output, `samples/abs.jh` gets the verdicts of the
+hand-written models below, and `samples/bugs.jh` shows what must stay
+unproved:
+
+```text
+last: 5 of 6 obligations proved
+  UNPROVED bb4: index-out-of-bounds: no linear proof     (while i <= xs.len)
+after_call: 0 of 1 obligations proved                    (x changed by bump(&x))
+scale: 3 of 3 obligations proved                         (x * 4 under 0 <= x <= 1000)
 ```
 
 With a compiler whose evaluator allows 100 million steps (see below), the
@@ -80,11 +98,15 @@ off-by-one loop condition and a loop without an invariant are all rejected.
   when `b` is a length, fresh variables for loads). A wrong rule there proves
   false things, which the checker cannot see.
 
+- **Casts carry the bounds check.** MIR checks `xs[i]` as
+  `i as u64 < xs.len as u64`. The model reads an `i64` cast to `u64` as its
+  value modulo 2^64, and `x as u64 < y` as `0 <= x < y` only when `y` is
+  known to lie in `[0, 2^63)`; a slice length is, as a view's invariant.
+
 ## Next
 
-- Generate the model from the compiler's MIR instead of by hand
-  (an `emit-obligations` dump), and test the generator against the
-  interpreter: a proved check must never fail on any input.
+- Test the generator against the interpreter: on random inputs, a proved
+  check must never fail.
 - Loop invariants written in the source, then inferred by an untrusted pass
   that proposes candidates (`0 <= i`, `i <= n`) and keeps those that check.
 - Calls through contracts: `Vec.index` requires `0 <= i < self.len()`.
