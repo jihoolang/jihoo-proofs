@@ -30,6 +30,9 @@ fn int(x: sexp.Sexp) -> Result(i128, String) {
     Ok(if negative { v } else { 0 - v })
 }
 
+// Within 64 bits, signed or unsigned.
+fn small(v: i128) -> bool { v >= 0 - (1 << 63) && v < (1 << 64) }
+
 fn index(x: sexp.Sexp) -> Result(i64, String) { Ok(int(x)? as i64) }
 
 fn head(x: sexp.Sexp, name: str, n: i64) -> Result([sexp.Sexp], String) {
@@ -57,7 +60,10 @@ fn operand(x: sexp.Sexp) -> Result(vc.Operand, String) {
     match tag(x)? {
         "opaque" => Ok(vc.Operand.Opaque)
         "local" => Ok(vc.Operand.Local(index(head(x, "local", 1)?[0])?))
-        "const" => Ok(vc.Operand.Const(int(head(x, "const", 1)?[0])?))
+        "const" => match int(head(x, "const", 1)?[0]) {
+            Ok(c) => if small(c) { Ok(vc.Operand.Const(c)) } else { Ok(vc.Operand.Opaque) }
+            Err(_) => Ok(vc.Operand.Opaque)
+        }
         t => Err("unknown operand `" + t + "`")
     }
 }
@@ -131,11 +137,14 @@ fn term(x: sexp.Sexp) -> Result(vc.Term, String) {
 
 fn kind(x: sexp.Sexp) -> Result(vc.Kind, String) {
     match tag(x)? {
-        // A range beyond i128 (`u128`) is not followed.
+        // Ranges beyond 64 bits (`i128`, `u128`) are not followed: the
+        // checker computes with i128 and keeps its numbers below 2^65.
         "int" => {
             let ps = head(x, "int", 2)?
             match (int(ps[0]), int(ps[1])) {
-                (Ok(lo), Ok(hi)) => Ok(vc.Kind.Int(lo, hi))
+                (Ok(lo), Ok(hi)) => if small(lo) && small(hi) {
+                    Ok(vc.Kind.Int(lo, hi))
+                } else { Ok(vc.Kind.Other) }
                 _ => Ok(vc.Kind.Other)
             }
         }

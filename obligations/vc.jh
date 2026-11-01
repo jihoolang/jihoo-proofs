@@ -135,7 +135,14 @@ struct Path {
     // The range of each variable: the locals, then the fresh ones.
     ranges: Vec(Kind)
     steps: i64
+    // The blocks this path has run: reaching one again without passing a
+    // loop head with an invariant is a loop the model cannot follow.
+    seen: Vec(bool)
 }
+
+// Paths followed per walk. Sequential branches double the paths, and a
+// function cut short says nothing, so its checks stay unproved.
+pub const MAX_PATHS: i64 = 2000
 
 fn clone_sym(s: Sym) -> Sym {
     match s {
@@ -280,7 +287,8 @@ fn start(f: Function, block: i64, facts: [Fact]) -> Path {
         state: Vec(Sym).new(),
         facts: Vec(linear.Lin).new(),
         ranges: Vec(Kind).new(),
-        steps: 0
+        steps: 0,
+        seen: Vec(bool).filled(f.blocks.len(), false)
     }
     for v in 0..f.locals.len() {
         p.ranges.push(f.locals[v].kind)
@@ -303,7 +311,10 @@ fn clone_path(p: Path, block: i64) -> Path {
     for s in p.state { state.push(clone_sym(s)) }
     var ranges = Vec(Kind).new()
     for k in p.ranges { ranges.push(k) }
-    Path { block, state, facts: clone_lins(p.facts.as_slice()), ranges, steps: p.steps + 1 }
+    Path {
+        block, state, facts: clone_lins(p.facts.as_slice()), ranges, steps: p.steps + 1,
+        seen: p.seen.clone()
+    }
 }
 
 fn holds(inout g: Gen, f: Function, p: Path, what: str, facts: [Fact]) {
@@ -424,6 +435,12 @@ fn arithmetic(inout g: Gen, f: Function, p: Path, dst: i64, sink r: Option(linea
     }
 }
 
+// `x * k` while its numbers stay within the checker's bounds.
+fn scaled(x: linear.Lin, k: i128) -> Option(linear.Lin) {
+    if k != 0 && x.magnitude() > linear.MAX_VALUE / (if k < 0 { 0 - k } else { k }) { return None }
+    Some(x.scale(k))
+}
+
 fn assign(inout g: Gen, f: Function, inout p: Path, dst: i64, rv: Rvalue) {
     let value = match rv {
         Use(o) => match o {
@@ -448,8 +465,8 @@ fn assign(inout g: Gen, f: Function, inout p: Path, dst: i64, rv: Rvalue) {
         Mul(a, b) => {
             let r = match (operand(p, a), operand(p, b)) {
                 (Some(x), Some(y)) => if y.is_constant() {
-                    Some(x.scale(y.constant))
-                } else if x.is_constant() { Some(y.scale(x.constant)) } else { None }
+                    scaled(x, y.constant)
+                } else if x.is_constant() { scaled(y, x.constant) } else { None }
                 _ => None
             }
             arithmetic(&g, f, p, dst, r)
@@ -504,9 +521,15 @@ fn havoc_or(inout p: Path, f: Function, dst: i64, sink value: Sym) {
 fn walk(inout g: Gen, f: Function, sink first: Path) {
     var work = Vec(Path).new()
     work.push(first)
+    var followed = 0
     loop {
         let Some(path) = work.pop() else { break }
         var p = path
+        followed += 1
+        if followed > MAX_PATHS {
+            g.errors.push(f.name.as_str() + ": more than " + MAX_PATHS.to_string() + " paths")
+            break
+        }
         // Every edge into a loop head, from any terminator, ends the path there.
         if p.steps > 0 {
             match invariant(f, p.block) {
@@ -518,12 +541,13 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
                 None => {}
             }
         }
-        if p.steps > f.blocks.len() * 4 {
+        if p.seen[p.block] {
             g.errors.push(
                 f.name.as_str() + ": a loop without an invariant reaches bb" + p.block.to_string()
             )
             continue
         }
+        p.seen[p.block] = true
         let b = f.blocks[p.block]
         for s in b.stmts {
             match s {

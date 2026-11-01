@@ -42,15 +42,18 @@ impl Report {
     // One line per check with a span, then the function's `ensures`, for
     // differential.py: `check NAME LO HI proved|unproved` and
     // `ensures NAME proved|unproved` (proved when every return meets it).
+    // A function the generator did not follow everywhere proves nothing:
+    // a check proved on the paths it saw may fail on another.
     pub fn machine(self) -> String {
         var out = String.new()
+        let whole = self.errors.len() == 0
         var ensures = true
         for r in self.results {
             let proved = match r.verdict {
                 Proved(_) => true
                 Unproved(_) => false
             }
-            let verdict = if proved { "proved" } else { "unproved" }
+            let verdict = if proved && whole { "proved" } else { "unproved" }
             if r.at.0 >= 0 {
                 out += "check " + self.function.as_str() + " " + r.at.0.to_string() + " " +
                     r.at.1.to_string() + " " + verdict + "\n"

@@ -6,7 +6,8 @@ inputs that meet its `requires` are evaluated at compile time (a `const`
 per input, `jihoo check`). The interpreter reports a failing check with its
 span; `emit-obligations` gives each check's span. A check the generator
 proved must never fail, and an `ensures` it proved must hold: either is a
-soundness bug in the model, and the exit status is 1.
+soundness bug in the model, and the exit status is 3 (other failures
+exit with 1).
 
     differential.py --compiler JIHOO samples/bugs.jh [--count N] [--seed S]
         [--mutate OLD NEW]
@@ -124,6 +125,7 @@ def main():
     ap.add_argument("--mutate", nargs=2, action="append", default=[])
     ap.add_argument("--report", type=Path)
     ap.add_argument("--release", action="store_true", help="overflow wraps, in the model and the interpreter")
+    ap.add_argument("--verifier", type=Path, help="emitted.jh, already built (else it is compiled and run)")
     args = ap.parse_args()
     jihoo = args.compiler.resolve(strict=True)
     sample = args.sample.resolve(strict=True)
@@ -155,8 +157,9 @@ def main():
         names = [n for n in sigs] + [n for n in re.findall(r"^fn (\w+)", source, re.M)
                                      if n not in sigs and n != "main"]
         names = [n for n in names if n in layout]
-        verified = run(jihoo, "run", "-I", HERE, "-I", ROOT / "kernel", HERE / "emitted.jh", "--",
-                       "--machine", tmp / "model.obligations",
+        verifier = [args.verifier.resolve()] if args.verifier else \
+            [jihoo, "run", "-I", HERE, "-I", ROOT / "kernel", HERE / "emitted.jh", "--"]
+        verified = run(*verifier, "--machine", tmp / "model.obligations",
                        contracts_path if contracts_path.exists() else HERE / "samples/none.contracts",
                        *names)
         if verified.returncode:
@@ -270,7 +273,7 @@ def main():
         print("  BUG " + b)
     for u in unmodelled[:5]:
         print("  unmodelled " + u)
-    sys.exit(1 if bugs else 0)
+    sys.exit(3 if bugs else 0)
 
 
 if __name__ == "__main__":

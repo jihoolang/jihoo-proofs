@@ -34,13 +34,14 @@ MUTATIONS = [
 ]
 
 
-def run(*args):
-    return subprocess.run(list(map(str, args)), cwd=ROOT, capture_output=True, text=True, timeout=300)
+def run(*args, timeout=300):
+    return subprocess.run(list(map(str, args)), cwd=ROOT, capture_output=True, text=True, timeout=timeout)
 
 
 def main():
     ap = argparse.ArgumentParser(__doc__)
     ap.add_argument("--compiler", type=Path, default=Path(shutil.which("jihoo") or "jihoo"))
+    ap.add_argument("--corpus", type=Path, help="also run corpus.py over this jihoo checkout")
     args = ap.parse_args()
     out = ROOT / "out/obligations"
     out.mkdir(parents=True, exist_ok=True)
@@ -103,11 +104,19 @@ def main():
         for name, old, new in MUTATIONS:
             r = run(sys.executable, HERE / "differential.py", "--compiler", jihoo,
                     HERE / f"samples/{name}.jh", "--count", "20", "--mutate", old, new)
-            if r.returncode != 1 or "BUG" not in r.stdout:
+            if r.returncode != 3 or "BUG" not in r.stdout:
                 raise SystemExit(f"a wrong model went unnoticed ({old} -> {new}):\n{r.stdout}{r.stderr}")
             differential[f"mutation {old} -> {new}"] = "noticed"
 
-    report = {"negative_tests_passed": passed, "example": status, "evaluations": steps,
+    corpus = None
+    if args.corpus and samples:
+        r = run(sys.executable, HERE / "corpus.py", "--compiler", jihoo, "--checkout", args.corpus,
+                "--report", out / "corpus.json", timeout=3600)
+        if r.returncode:
+            raise SystemExit(f"corpus:\n{r.stdout[-3000:]}{r.stderr[-3000:]}")
+        corpus = json.loads((out / "corpus.json").read_text())["totals"]
+
+    report = {"negative_tests_passed": passed, "example": status, "evaluations": steps, "corpus": corpus,
               "emitted_samples": samples or "the compiler has no emit-obligations",
               "differential": differential}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")

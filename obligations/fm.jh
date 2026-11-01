@@ -40,10 +40,25 @@ fn reduce(r: Row) -> Row {
     Row { lin: linear.Lin { coefs, constant: r.lin.constant / g }, weights }
 }
 
-fn combine(p: Row, a: i128, q: Row, b: i128) -> Row {
+// Products stay below 2^120; past that a row is dropped, which loses proofs
+// but never makes one.
+const LIMIT: i128 = 1 << 120
+
+fn fits(x: i128, k: i128) -> bool { k == 0 || abs(x) <= LIMIT / abs(k) }
+
+fn row_fits(r: Row, k: i128) -> bool {
+    if !fits(r.lin.magnitude(), k) { return false }
+    for w in r.weights {
+        if !fits(w, k) { return false }
+    }
+    true
+}
+
+fn combine(p: Row, a: i128, q: Row, b: i128) -> Option(Row) {
+    if !row_fits(p, a) || !row_fits(q, b) { return None }
     var weights = Vec(i128).new()
     for i in 0..p.weights.len() { weights.push(p.weights[i] * a + q.weights[i] * b) }
-    reduce(Row { lin: p.lin.combine(a, q.lin, b), weights })
+    Some(reduce(Row { lin: p.lin.combine(a, q.lin, b), weights }))
 }
 
 fn contradiction(rows: [Row]) -> Option(linear.Certificate) {
@@ -147,7 +162,10 @@ pub fn prove(g: linear.Goal) -> Result(linear.Certificate, String) {
                 for q in rows {
                     let b = q.lin.coef(v)
                     if b < 0 {
-                        next.push(combine(p, -b, q, a))
+                        match combine(p, -b, q, a) {
+                            Some(r) => next.push(r)
+                            None => {}
+                        }
                         if next.len() > MAX_ROWS { return Err("too many derived facts") }
                     }
                 }

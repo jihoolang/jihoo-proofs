@@ -114,3 +114,16 @@ fn a_loop_needs_an_invariant() {
     let r = verify.verify(f)
     assert(r.errors.len() > 0, "no error")
 }
+
+#[test]
+fn checker_refuses_numbers_beyond_its_bounds() {
+    // Correct certificates, but the checker would have to leave its bounds.
+    var big = Vec(linear.Lin).new()
+    big.push(linear.Lin.of(0).scale(1 << 66))
+    let g = linear.Goal { facts: big, claim: linear.Lin.of(0) }
+    assert(linear.check(g, linear.certificate([1, 1 << 66])).is_err(), "large fact")
+    assert(
+        linear.check(goal(), linear.certificate([1 << 51, 1 << 51, 1 << 51])).is_err(),
+        "large weight"
+    )
+}

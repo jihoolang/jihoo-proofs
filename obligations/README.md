@@ -98,6 +98,16 @@ off-by-one loop condition and a loop without an invariant are all rejected.
   when `b` is a length, fresh variables for loads). A wrong rule there proves
   false things, which the checker cannot see.
 
+- **A function is followed everywhere or not at all.** A path that comes
+  back to a block it ran, without a loop head with an invariant between,
+  stops with an error, and at most 2,000 paths are followed per function
+  (sequential branches double them). A function with an error proves
+  nothing: a check proved on the paths seen may fail on another.
+- **Numbers are bounded.** The checker computes in i128 and accepts only
+  facts whose numbers are below 2^65, weights below 2^50 and at most 2,047
+  facts, so no product or sum it forms can overflow; past those bounds it
+  rejects, which loses a proof. Ranges and constants beyond 64 bits are
+  not followed.
 - **Casts carry the bounds check.** MIR checks `xs[i]` as
   `i as u64 < xs.len as u64`. The model reads an `i64` cast to `u64` as its
   value modulo 2^64, and `x as u64 < y` as `0 <= x < y` only when `y` is
@@ -125,7 +135,7 @@ bugs.jh: 60 probes, 39 passed, 20 unproved check failed, 1 ensures failed
 ```
 
 A failing check the generator proved, or a failing `ensures` it proved, is
-a soundness bug: the script prints it and exits with 1. `check.py` runs the
+a soundness bug: the script prints it and exits with 3. `check.py` runs the
 three samples in debug and `--release` builds, then makes the model wrong
 on purpose with `--mutate` (reading `i <= xs.len` as `i < xs.len`;
 forgetting that `bump(&x)` changes `x`) and requires the bug to be found:
@@ -133,6 +143,23 @@ forgetting that `bump(&x)` changes `x`) and requires the bug to be found:
 ```text
 BUG after_call(10,): compile-time evaluation reached a trap at bytes 2817..2823 (ensures was proved)
 ```
+
+`corpus.py` does the same for real programs: every function of every
+file in a jihoo checkout's `tests/run` and `examples` is loaded and
+verified without contracts, and `differential.py` runs on each file.
+`check.py --corpus ../jihoo` includes it. Over the 98 files of jihoo 0.4.2:
+
+```text
+364 functions, 317 checks, 25 proved, 270 probes, 12 unproved checks failed, 0 bugs
+```
+
+Few checks are proved because most of them are in loops, and loops without
+invariants prove nothing (see below). The 37 failures outside the model are
+the interpreter's limits (printing, statics, intrinsics, call depth), not
+checks the model missed. The first runs found three bugs in the tools, none
+in what they proved: `emit-obligations` overflowed computing `i128`'s range;
+the verifier overflowed on 128-bit ranges; and it followed loops without
+invariants by unrolling them, so a few branches in a loop took 30 GB.
 
 Random inputs find a wrong rule only on inputs that reach it: a model that
 believed slices hold at most 1,000 elements would pass, since the probes'
