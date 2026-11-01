@@ -12,7 +12,12 @@ in a function whose proof assumed a contract that is not proved (a callee's
 `ensures`, or its own `requires` at a call) is not a bug.
 
     differential.py --compiler JIHOO samples/bugs.jh [--count N] [--seed S]
-        [--mutate OLD NEW]
+        [--mutate OLD NEW] [--verdicts compiler]
+
+`--verdicts compiler` takes the verdicts from the compiler's own verifier
+(`jihoo verify --machine`) instead of this experiment's, so the same test
+checks the checker that removes proved checks from programs. Its verdicts
+already count a proof resting on an unproved contract as unproved.
 
 `--mutate` replaces text in the emitted model before verifying it, so a
 test can make the model wrong on purpose and expect a bug to be found.
@@ -186,6 +191,8 @@ def main():
     ap.add_argument("--release", action="store_true", help="overflow wraps, in the model and the interpreter")
     ap.add_argument("--infer", action="store_true", help="infer invariants for loops without one")
     ap.add_argument("--verifier", type=Path, help="emitted.jh, already built (else it is compiled and run)")
+    ap.add_argument("--verdicts", choices=["experiment", "compiler"], default="experiment",
+                    help="whose verdicts to test: emitted.jh's, or `jihoo verify --machine`")
     args = ap.parse_args()
     jihoo = args.compiler.resolve(strict=True)
     sample = args.sample.resolve(strict=True)
@@ -215,8 +222,13 @@ def main():
         names = [n for n in names if n in layout]
         verifier = [args.verifier.resolve()] if args.verifier else \
             [jihoo, "run", "-I", HERE, "-I", ROOT / "kernel", HERE / "emitted.jh", "--"]
-        verified = run(*verifier, "--machine", *(["--infer"] if args.infer else []), tmp / "model.obligations",
-                       *names)
+        if args.verdicts == "compiler":
+            if args.mutate:
+                sys.exit("--mutate changes the experiment's model, not the compiler's")
+            verified = run(jihoo, "verify", "--machine", *mode, sample)
+        else:
+            verified = run(*verifier, "--machine", *(["--infer"] if args.infer else []),
+                           tmp / "model.obligations", *names)
         if verified.returncode:
             sys.exit(verified.stdout + verified.stderr)
 
@@ -224,6 +236,8 @@ def main():
         checks, ensures, requires = {}, {}, {}
         for line in verified.stdout.splitlines():
             parts = line.split()
+            if not parts:
+                continue
             if parts[0] == "check":
                 key = (int(parts[2]), int(parts[3]))
                 checks.setdefault(key, (parts[1], True))
@@ -233,7 +247,9 @@ def main():
                 requires[key] = requires.get(key, True) and parts[5] == "proved"
             elif parts[0] == "ensures":
                 ensures[parts[1]] = parts[2] == "proved"
-        assumed = tainted(layout, ensures, requires)
+        # The compiler's verdicts are not modular: nothing proved rests on
+        # an unproved contract.
+        assumed = set() if args.verdicts == "compiler" else tainted(layout, ensures, requires)
 
         # Inputs that meet each function's `requires`, as compile-time probes.
         probes = []

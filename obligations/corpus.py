@@ -5,6 +5,11 @@ must load and verify with the contracts its source states, and differential.py m
 check that was proved and fails.
 
     corpus.py --compiler JIHOO --checkout ../jihoo [--count N] [--filter TEXT]
+        [--verdicts compiler]
+
+With `--verdicts compiler`, differential.py tests the compiler's own
+verifier (`jihoo verify --machine`); the counts of proved checks are still
+this experiment's.
 """
 import argparse
 import json
@@ -30,6 +35,8 @@ def main():
     ap.add_argument("--filter", default="")
     ap.add_argument("--infer", action="store_true", help="infer invariants for loops without one")
     ap.add_argument("--report", type=Path, default=ROOT / "out/obligations/corpus.json")
+    ap.add_argument("--verdicts", choices=["experiment", "compiler"], default="experiment",
+                    help="whose verdicts differential.py tests")
     args = ap.parse_args()
     jihoo = args.compiler.resolve(strict=True)
     files = sorted((args.checkout / "tests/run").glob("*.jh")) + sorted((args.checkout / "examples").glob("*.jh"))
@@ -82,7 +89,7 @@ def main():
 
             report = tmp / "differential.json"
             d = run(sys.executable, HERE / "differential.py", "--compiler", jihoo, f, "--count", args.count,
-                    "--verifier", verifier, "--report", report, *infer)
+                    "--verifier", verifier, "--report", report, "--verdicts", args.verdicts, *infer)
             if d.returncode == 3:
                 bugs.append(f"{name}:\n{d.stdout}")
             elif d.returncode:
