@@ -6,7 +6,9 @@ fn add_u8(a: u8, b: u8) -> u8 {
 }
 
 // Cannot: the casts widen, so the sum is at most 510.
-fn widen(a: u8, b: u8) -> u64 {
+fn widen(a: u8, b: u8) -> u64
+    ensures result <= 510
+{
     a as u64 + b as u64
 }
 
@@ -21,7 +23,10 @@ fn guarded_sub(a: u64, b: u64) -> u64 {
 }
 
 // i32 counters under a bound.
-fn bounded(x: i32) -> i32 {
+fn bounded(x: i32) -> i32
+    requires -1000 <= x && x <= 1000
+    ensures -1999 <= result && result <= 2001
+{
     x * 2 + 1
 }
 

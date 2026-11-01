@@ -56,10 +56,10 @@ pub fn clamp() -> vc.Function {
     var ensures = Vec(vc.Fact).new()
     ensures.push(vc.fact(vc.Cmp.Le, l(2), l(0)))
     ensures.push(vc.fact(vc.Cmp.Le, l(0), l(3)))
-    vc.Function {
-        name: "clamp".to_string(), locals, blocks, requires, ensures,
-        invariants: Vec((i64, Vec(vc.Fact))).new()
-    }
+    var f = vc.function("clamp", locals, blocks)
+    f.requires = requires
+    f.ensures = ensures
+    f
 }
 
 // fn sum(xs: [i64]) -> i64 {
@@ -116,10 +116,9 @@ pub fn sum_with(sink invariant: Vec(vc.Fact)) -> vc.Function {
 
     var invariants = Vec((i64, Vec(vc.Fact))).new()
     invariants.push((1, invariant))
-    vc.Function {
-        name: "sum".to_string(), locals, blocks, requires: Vec(vc.Fact).new(),
-        ensures: Vec(vc.Fact).new(), invariants
-    }
+    var f = vc.function("sum", locals, blocks)
+    f.invariants = invariants
+    f
 }
 
 // 0 <= i <= xs.len

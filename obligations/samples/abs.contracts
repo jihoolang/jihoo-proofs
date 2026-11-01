@@ -1,7 +1,0 @@
-; Until jihoo has contract syntax. Locals are MIR's numbers; `sum`'s
-; xs.len is local 14 (emit-obligations' `lengths`), its loop head bb1.
-(contract clamp
-  (requires (le (local 2) (local 3)))
-  (ensures (le (local 2) (local 0)) (le (local 0) (local 3))))
-(contract sum
-  (invariant 1 (le (const 0) (local 3)) (le (local 3) (local 14))))

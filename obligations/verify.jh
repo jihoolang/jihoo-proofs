@@ -52,8 +52,9 @@ impl Report {
     }
 
     // One line per check with a span, then the function's `ensures`, for
-    // differential.py: `check NAME LO HI proved|unproved` and
-    // `ensures NAME proved|unproved` (proved when every return meets it).
+    // differential.py: `check NAME LO HI proved|unproved`,
+    // `requires NAME LO HI CALLEE proved|unproved` for a call's `requires`,
+    // and `ensures NAME proved|unproved` (proved when every return meets it).
     // A function the generator did not follow everywhere proves nothing:
     // a check proved on the paths it saw may fail on another.
     pub fn machine(self) -> String {
@@ -66,7 +67,12 @@ impl Report {
                 Unproved(_) => false
             }
             let verdict = if proved && whole { "proved" } else { "unproved" }
-            if r.at.0 >= 0 {
+            let call = r.what.as_str().find(": requires of ")
+            if r.at.0 >= 0 && call.is_some() {
+                let callee = r.what.as_str()[call.unwrap() + 14..]
+                out += "requires " + self.function.as_str() + " " + r.at.0.to_string() + " " +
+                    r.at.1.to_string() + " " + callee + " " + verdict + "\n"
+            } else if r.at.0 >= 0 {
                 out += "check " + self.function.as_str() + " " + r.at.0.to_string() + " " +
                     r.at.1.to_string() + " " + verdict
                 // Why: the function was not followed everywhere, or where the
@@ -109,7 +115,13 @@ impl Report {
 }
 
 pub fn verify(f: vc.Function) -> Report {
-    let obs = vc.generate(f)
+    let none = Vec(vc.Function).new()
+    verify_with(f, none.as_slice())
+}
+
+// The same, with the contracts of the functions in `all` at calls to them.
+pub fn verify_with(f: vc.Function, all: [vc.Function]) -> Report {
+    let obs = vc.generate_with(f, all)
     var results = Vec(Result1).new()
     for o in obs.list {
         let verdict = match fm.prove(o.goal) {

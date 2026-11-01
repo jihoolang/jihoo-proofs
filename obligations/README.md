@@ -4,9 +4,10 @@ The first experiment toward jihoo 0.5's verification
 ([design](https://github.com/jihoolang/jihoo/blob/main/docs/internals/verification.md)).
 jihoo's MIR already states what must hold for a program to run without
 trapping: a bounds check is an `assert` terminator, and `+`/`-` check for
-overflow in debug builds. This experiment proves those obligations, plus a
-function's `requires`/`ensures`, without new syntax and without trusting the
-prover:
+overflow in debug builds. This experiment proves those obligations, plus the
+[contracts](https://github.com/jihoolang/jihoo/blob/main/docs/language/contracts.md)
+the source states (`requires`, `ensures`, loop `invariant`s), without
+trusting the prover:
 
 1. `vc.jh` (trusted: it is the semantics) models MIR's integer part and walks
    each path between the entry, loop heads and returns, collecting linear
@@ -20,10 +21,11 @@ prover:
 
 `models.jh` holds two functions' MIR exactly as `jihoo emit-mir` printed it
 (0.4.2, debug build), written in the model by hand. A compiler with
-`emit-obligations` (after 0.4.2) prints the model itself: `load.jh` reads
-it, and `emitted.jh` verifies the functions that a contracts file names.
-Contracts live in such files (`samples/*.contracts`) until jihoo has syntax
-for them, and name MIR's local and block numbers.
+`emit-obligations` (after 0.4.2) prints the model itself, and one with
+contracts (after 0.4.2 too) prints each function's contract with it, over
+MIR's locals: `load.jh` reads both, and `emitted.jh` verifies the program's
+functions. A call to a function with a contract proves its `requires` and
+assumes its `ensures`.
 
 ## Try it
 
@@ -31,8 +33,7 @@ for them, and name MIR's local and block numbers.
 jihoo test -I obligations obligations/tests.jh       # rejection cases, at runtime
 jihoo run -I obligations obligations/example.jh      # everything at compile time
 jihoo emit-obligations obligations/samples/bugs.jh > out/bugs.obligations
-jihoo run -I obligations -I kernel obligations/emitted.jh -- \
-    out/bugs.obligations obligations/samples/bugs.contracts
+jihoo run -I obligations -I kernel obligations/emitted.jh -- out/bugs.obligations
 python3 obligations/check.py                         # all of these, with a report
 ```
 
@@ -46,6 +47,24 @@ last: 5 of 6 obligations proved
 after_call: 0 of 1 obligations proved                    (x changed by bump(&x))
 scale: 3 of 3 obligations proved                         (x * 4 under 0 <= x <= 1000)
 ```
+
+`samples/calls.jh` proves through calls: `bump(inout x)` promises
+`x == old(x) + 1` under `x < 100`, and `inc(x)` promises `result == x + 1`:
+
+```text
+after_bump: 3 of 3 obligations proved     (bump's requires; result == n + 1)
+unchecked_bump: 0 of 1 obligations proved
+  UNPROVED bb0: requires of main.bump.1: no linear proof   (n may be 100)
+twice: 6 of 6 obligations proved          (inc(x) + inc(x) cannot overflow)
+count: 13 of 13 obligations proved        (a loop of inc, invariant c == i)
+down: 8 of 8 obligations proved           (recursion assumes its ensures)
+```
+
+A local lent to one call (`bump(&x)`) stays a variable, which the call
+gives a new value, and the integer an `inout` parameter points to is a
+variable when the pointer only reaches it. At a loop head, a variable the
+function never assigns keeps its value on entry, so the facts `requires`
+states of such variables still hold there.
 
 With a compiler whose evaluator allows 100 million steps (see below), the
 example prints:
@@ -141,10 +160,15 @@ bugs.jh: 60 probes, 39 passed, 20 unproved check failed, 1 ensures failed
 ```
 
 A failing check the generator proved, or a failing `ensures` it proved, is
-a soundness bug: the script prints it and exits with 3. `check.py` runs the
+a soundness bug: the script prints it and exits with 3. Proofs are modular,
+so a failure in a function whose proof assumed a contract that is not
+proved (a callee's `ensures`, or its own `requires` where some call left
+it unproved, and so on along the calls) is counted as `failed under an
+unproved contract` instead. `check.py` runs the
 three samples in debug and `--release` builds, then makes the model wrong
 on purpose with `--mutate` (reading `i <= xs.len` as `i < xs.len`;
-forgetting that `bump(&x)` changes `x`) and requires the bug to be found:
+forgetting that `bump(&x)` changes `x`; a call that forgets its callee, so
+its `requires` is never proved) and requires the bug to be found:
 
 ```text
 BUG after_call(10,): compile-time evaluation reached a trap at bytes 2817..2823 (ensures was proved)
@@ -152,7 +176,8 @@ BUG after_call(10,): compile-time evaluation reached a trap at bytes 2817..2823 
 
 `corpus.py` does the same for real programs: every function of every
 file in a jihoo checkout's `tests/run` and `examples` is loaded and
-verified without contracts, and `differential.py` runs on each file.
+verified with the contracts its source states (almost none), and
+`differential.py` runs on each file.
 `check.py --corpus ../jihoo` includes it, with inferred invariants. Over
 the 98 files of jihoo 0.4.2:
 
@@ -200,6 +225,7 @@ written invariant, it finds `0 <= i <= xs.len`.
 
 ## Next
 
-- Loop invariants written in the source, then inferred by an untrusted pass
-  that proposes candidates (`0 <= i`, `i <= n`) and keeps those that check.
-- Calls through contracts: `Vec.index` requires `0 <= i < self.len()`.
+- Contracts for `std` (`Vec.index` requires `0 <= i < self.len()`), which
+  need clauses over `Vec` lengths and fields.
+- `||` and `!=` in clauses and conditions: case splits.
+- The checker in the compiler, so that an unproved contract is an error.

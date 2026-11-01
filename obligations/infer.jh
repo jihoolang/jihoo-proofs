@@ -18,7 +18,7 @@ fn successors(t: vc.Term) -> Vec(i64) {
         Any(bs) => {
             for b in bs { out.push(b) }
         }
-        Call(_, b) => out.push(b)
+        Call(_, b, _) => out.push(b)
         _ => {}
     }
     out
@@ -66,7 +66,15 @@ fn assigned_in(f: vc.Function) -> Vec(i64) {
             }
         }
         match b.term {
-            Call(dst, _) => if dst >= 0 { here[dst] = true }
+            Call(dst, _, site) => {
+                if dst >= 0 { here[dst] = true }
+                for a in site.args {
+                    match a {
+                        Lent(x) => here[x] = true
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
         for l in 0..f.locals.len() {
@@ -117,7 +125,7 @@ fn candidates(f: vc.Function) -> Vec(vc.Fact) {
 
 fn copy_facts(xs: [vc.Fact]) -> Vec(vc.Fact) {
     var out = Vec(vc.Fact).new()
-    for x in xs { out.push(vc.fact(x.op, x.a, x.b)) }
+    for x in xs { out.push(x.clone()) }
     out
 }
 
@@ -125,6 +133,12 @@ pub const MAX_ROUNDS: i64 = 20
 
 // `f` with invariants proposed for its loop heads that have none.
 pub fn infer(sink f: vc.Function) -> vc.Function {
+    let none = Vec(vc.Function).new()
+    infer_with(f, none.as_slice())
+}
+
+// The same, with the contracts of the functions in `all` at calls to them.
+pub fn infer_with(sink f: vc.Function, all: [vc.Function]) -> vc.Function {
     let proposed = candidates(f)
     let heads = loop_heads(f)
     var g = f
@@ -143,7 +157,7 @@ pub fn infer(sink f: vc.Function) -> vc.Function {
         }
     }
     for _ in 0..MAX_ROUNDS {
-        let obs = vc.generate(g)
+        let obs = vc.generate_with(g, all)
         var failed = Vec(Vec(bool)).new()
         for inv in g.invariants { failed.push(Vec(bool).filled(inv.1.len(), false)) }
         var any = false
@@ -165,7 +179,7 @@ pub fn infer(sink f: vc.Function) -> vc.Function {
             if ours[i] {
                 var kept = Vec(vc.Fact).new()
                 for j, x in g.invariants[i].1 {
-                    if !failed[i][j] { kept.push(vc.fact(x.op, x.a, x.b)) }
+                    if !failed[i][j] { kept.push(x.clone()) }
                 }
                 g.invariants[i].1 = kept
             }

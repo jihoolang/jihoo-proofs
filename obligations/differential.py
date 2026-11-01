@@ -4,10 +4,12 @@
 For each function of a sample with integer and `[i64]` parameters, random
 inputs that meet its `requires` are evaluated at compile time (a `const`
 per input, `jihoo check`). The interpreter reports a failing check with its
-span; `emit-obligations` gives each check's span. A check the generator
-proved must never fail, and an `ensures` it proved must hold: either is a
-soundness bug in the model, and the exit status is 3 (other failures
-exit with 1).
+span; `emit-obligations` gives each check's span and each function's
+contract. A check the generator proved must never fail, and an `ensures` it
+proved must hold: either is a soundness bug in the model, and the exit
+status is 3 (other failures exit with 1). Proofs are modular, so a failure
+in a function whose proof assumed a contract that is not proved (a callee's
+`ensures`, or its own `requires` at a call) is not a bug.
 
     differential.py --compiler JIHOO samples/bugs.jh [--count N] [--seed S]
         [--mutate OLD NEW]
@@ -59,7 +61,7 @@ def int_range(name):
 def signatures(source):
     """The sample's functions whose parameters the harness can generate."""
     out = {}
-    for m in re.finditer(r"^fn (\w+)\(([^)]*)\)(?:\s*->\s*([\w\[\]]+))?\s*\{", source, re.M):
+    for m in re.finditer(r"^fn (\w+)\(([^)]*)\)(?:\s*->\s*([\w\[\]]+))?\s*(?:\{|requires|ensures)", source, re.M):
         name, params, ret = m.group(1), m.group(2).strip(), m.group(3)
         if name == "main":
             continue
@@ -99,21 +101,78 @@ def literal(v):
     return f"({v})" if v < 0 else str(v)
 
 
+def section(f, name):
+    return [x for x in f if isinstance(x, list) and x and x[0] == name]
+
+
+def pairs(f, name):
+    rows = section(f, name)
+    return [(int(a), int(b)) for a, b in rows[0][1:]] if rows else []
+
+
+def clauses(f, name):
+    """A function's `requires` or `ensures`: (op, a, b), each side a
+    (constant, [(variable, coefficient)]) or None when it is opaque."""
+    out = []
+    for c in section(f, name):
+        op, a, b = c[1][0], c[1][1], c[1][2]
+        def side(x):
+            if x[0] != "lin":
+                return None
+            return int(x[1]), [(int(v), int(k)) for v, k in x[2:]]
+        out.append((op, side(a), side(b)))
+    return out
+
+
+OPS = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "==", "ne": "!="}
+
+
 def evaluate(fact, env):
     op, a, b = fact
-    def operand(o):
-        if o[0] == "const":
-            return int(o[1])
-        return env[int(o[1])]
-    x, y = operand(a), operand(b)
+    if a is None or b is None:
+        return True
+    def value(x):
+        return x[0] + sum(k * env[v] for v, k in x[1])
+    x, y = value(a), value(b)
     return {"lt": x < y, "le": x <= y, "gt": x > y, "ge": x >= y, "eq": x == y, "ne": x != y}[op]
 
 
 def condition(facts, env_text):
-    def operand(o):
-        return f"({o[1]} as i128)" if o[0] == "const" else f"({env_text[int(o[1])]} as i128)"
-    ops = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "==", "ne": "!="}
-    return " && ".join(f"{operand(a)} {ops[op]} {operand(b)}" for op, a, b in facts) or "true"
+    def value(x):
+        return " + ".join([f"({x[0]} as i128)"] + [f"({k} as i128) * ({env_text[v]} as i128)" for v, k in x[1]])
+    return " && ".join(f"{value(a)} {OPS[op]} {value(b)}" for op, a, b in facts
+                       if a is not None and b is not None) or "true"
+
+
+def tainted(layout, ensures, requires):
+    """The functions whose proofs assumed a contract that is not proved."""
+    by_symbol = {f[2]: n for n, f in layout.items()}
+    calls = {n: set() for n in layout}
+    for n, f in layout.items():
+        for block in section(f, "block"):
+            for c in [t for t in block if isinstance(t, list) and t and t[0] == "call"]:
+                for part in c[3:]:
+                    if part[0] == "fn" and part[1] in by_symbol:
+                        calls[n].add(by_symbol[part[1]])
+    # A caller assumes its callees' `ensures`; a callee assumes its
+    # `requires`, which its callers prove.
+    has = {n: (bool(section(f, "requires")), bool(section(f, "ensures"))) for n, f in layout.items()}
+    bad = set()
+    for (_, callee), proved in requires.items():
+        if not proved and callee in by_symbol:
+            bad.add(by_symbol[callee])
+    changed = True
+    while changed:
+        changed = False
+        for n, callees in calls.items():
+            for g in callees:
+                if n not in bad and has[g][1] and (g in bad or ensures.get(g) is False):
+                    bad.add(n)
+                    changed = True
+                if g not in bad and has[g][0] and n in bad:
+                    bad.add(g)
+                    changed = True
+    return bad
 
 
 def main():
@@ -131,15 +190,7 @@ def main():
     jihoo = args.compiler.resolve(strict=True)
     sample = args.sample.resolve(strict=True)
     source = sample.read_text()
-    contracts_path = sample.with_suffix(".contracts")
-    contracts = {}
-    if contracts_path.exists():
-        for c in sexps(contracts_path.read_text()):
-            parts = {p[0]: p[1:] for p in c[2:] if p[0] in ("requires", "ensures")}
-            contracts[c[1]] = parts
     rng = random.Random(args.seed)
-    near = sorted({int(c) + d for c in re.findall(r"\(const (-?\d+)\)", contracts_path.read_text())
-                   for d in (-1, 0, 1)} if contracts_path.exists() else set())
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
@@ -154,6 +205,10 @@ def main():
             model = model.replace(old, new)
         (tmp / "model.obligations").write_text(model)
         layout = {f[1]: f for f in sexps(model)}
+        # The constants of the program's contracts, where inputs often go wrong.
+        near = sorted({side[0] + d for f in layout.values() if f[2].startswith("main.")
+                       for _, x, y in clauses(f, "requires") + clauses(f, "ensures")
+                       for side in (x, y) if side for d in (-1, 0, 1)})
         sigs = signatures(source)
         names = [n for n in sigs] + [n for n in re.findall(r"^fn (\w+)", source, re.M)
                                      if n not in sigs and n != "main"]
@@ -161,29 +216,33 @@ def main():
         verifier = [args.verifier.resolve()] if args.verifier else \
             [jihoo, "run", "-I", HERE, "-I", ROOT / "kernel", HERE / "emitted.jh", "--"]
         verified = run(*verifier, "--machine", *(["--infer"] if args.infer else []), tmp / "model.obligations",
-                       contracts_path if contracts_path.exists() else HERE / "samples/none.contracts",
                        *names)
         if verified.returncode:
             sys.exit(verified.stdout + verified.stderr)
 
         # A check is proved when every obligation with its span is.
-        checks, ensures = {}, {}
+        checks, ensures, requires = {}, {}, {}
         for line in verified.stdout.splitlines():
             parts = line.split()
             if parts[0] == "check":
                 key = (int(parts[2]), int(parts[3]))
                 checks.setdefault(key, (parts[1], True))
                 checks[key] = (parts[1], checks[key][1] and parts[4] == "proved")
+            elif parts[0] == "requires":
+                key = (parts[1] + " " + parts[2] + " " + parts[3], parts[4])
+                requires[key] = requires.get(key, True) and parts[5] == "proved"
             elif parts[0] == "ensures":
                 ensures[parts[1]] = parts[2] == "proved"
+        assumed = tainted(layout, ensures, requires)
 
         # Inputs that meet each function's `requires`, as compile-time probes.
         probes = []
         for name, (kinds, ret) in sigs.items():
             f = layout[name]
-            lengths = {int(a): int(b) for a, b in f[5][1:]}
-            requires = contracts.get(name, {}).get("requires", [])
-            post = contracts.get(name, {}).get("ensures", [])
+            lengths = dict(pairs(f, "lengths"))
+            entries = pairs(f, "entries")
+            pre = clauses(f, "requires")
+            post = clauses(f, "ensures")
             made, tries = 0, 0
             while made < args.count and tries < args.count * 200:
                 tries += 1
@@ -196,7 +255,9 @@ def main():
                     else:
                         env[i + 1] = v
                         text[i + 1] = literal(v)
-                if not all(evaluate(x, env) for x in requires):
+                for v, e in entries:
+                    env[e], text[e] = env[v], text[v]
+                if not all(evaluate(x, env) for x in pre):
                     continue
                 made += 1
                 probes.append((name, vals, post, text))
@@ -222,7 +283,7 @@ def main():
 
         live = list(range(len(probes)))
         results = {"passed": 0, "unproved check failed": 0, "ensures failed": 0,
-                   "unmodelled failure": 0, "bug": 0}
+                   "failed under an unproved contract": 0, "unmodelled failure": 0, "bug": 0}
         bugs, unmodelled = [], []
         prefix = len(source.encode())
         while live:
@@ -247,14 +308,18 @@ def main():
             lo, hi = d["span"]["start"]["byte"], d["span"]["end"]["byte"]
             where = f"{name}{tuple(vals)}: {d['message']} at bytes {lo}..{hi}"
             if lo >= prefix:
-                if ensures.get(name):
+                if ensures.get(name) and name in assumed:
+                    results["failed under an unproved contract"] += 1
+                elif ensures.get(name):
                     results["bug"] += 1
                     bugs.append(where + " (ensures was proved)")
                 else:
                     results["ensures failed"] += 1
             elif (lo, hi) in checks and lo < prefix:
                 owner, proved = checks[(lo, hi)]
-                if proved:
+                if proved and owner in assumed:
+                    results["failed under an unproved contract"] += 1
+                elif proved:
                     results["bug"] += 1
                     bugs.append(where + f" (proved in {owner})")
                 else:

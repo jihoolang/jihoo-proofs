@@ -16,8 +16,8 @@ EXPECTED = [
     "clamp: 6 of 6 obligations proved",
     "sum: 8 of 10 obligations proved",
 ]
-# Each sample's verdicts from the compiler's own MIR; abs.jh must agree with
-# the hand-written models.
+# Each sample's verdicts from the compiler's own MIR and the contracts in
+# its source; abs.jh must agree with the hand-written models.
 SAMPLES = {
     "abs": EXPECTED,
     "bugs": [
@@ -26,11 +26,23 @@ SAMPLES = {
         "after_call: 0 of 1 obligations proved",
         "scale: 3 of 3 obligations proved",
     ],
+    "calls": [
+        "bump: 4 of 4 obligations proved",
+        "after_bump: 3 of 3 obligations proved",
+        "unchecked_bump: 0 of 1 obligations proved",
+        "  UNPROVED bb0: requires of main.bump.1: no linear proof",
+        "twice: 6 of 6 obligations proved",
+        "count: 13 of 13 obligations proved",
+        "down: 8 of 8 obligations proved",
+    ],
 }
-# Changes that make the model wrong; the differential test must notice.
+# Changes that make the model wrong; the differential test must notice:
+# an off-by-one loop read as correct, a call that changes `x` read as one
+# that does not, and a call whose callee's `requires` is never proved.
 MUTATIONS = [
     ("bugs", "(set 4 (cmp le (local 3) (local 13)))", "(set 4 (cmp lt (local 3) (local 13)))"),
-    ("bugs", "(set 5 (use (opaque escaped)))", "(set 5 (use (local 1)))"),
+    ("bugs", "(args (lent 2)) (at 526 534)", "(args (local 2)) (at 526 534)"),
+    ("calls", "(call _ 1 (fn main.bump.1) (args (lent 2)) (at 541 549))", "(call _ 1 (args (lent 2)) (at 541 549))"),
 ]
 
 
@@ -77,8 +89,7 @@ def main():
         for name, expected in SAMPLES.items():
             emitted = out / f"{name}.obligations"
             emitted.write_text(run(jihoo, "emit-obligations", HERE / f"samples/{name}.jh").stdout)
-            r = run(jihoo, "run", "-I", HERE, "-I", ROOT / "kernel", HERE / "emitted.jh", "--",
-                    emitted, HERE / f"samples/{name}.contracts")
+            r = run(jihoo, "run", "-I", HERE, "-I", ROOT / "kernel", HERE / "emitted.jh", "--", emitted)
             if r.returncode:
                 raise SystemExit(r.stdout + r.stderr)
             lines = r.stdout.splitlines()
@@ -92,7 +103,7 @@ def main():
     # The generator against the interpreter: no proved check may fail.
     differential = {}
     if samples:
-        for name in ["abs", "bugs", "ints", "arrays"]:
+        for name in ["abs", "bugs", "ints", "arrays", "calls"]:
             for mode in [[], ["--release"]]:
                 key = name + (" --release" if mode else "")
                 result = out / f"differential-{name}{'-release' if mode else ''}.json"

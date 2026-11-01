@@ -106,12 +106,30 @@ pub enum Term {
     // Any of the blocks (a `switch` the model does not follow).
     Any(Vec(i64))
     // A call whose result goes to the local (none if negative), then the block.
-    Call(i64, i64)
+    Call(i64, i64, CallSite)
     // The program stops on purpose (`panic`, `trap()`).
     Trap
     Return
     Unreachable
 }
+
+// A call's argument as the callee's contract sees it.
+pub enum Arg {
+    Value(Operand)
+    // A `str` or slice whose length is the variable.
+    View(i64)
+    // A variable lent to an `inout` parameter: the call may change it.
+    Lent(i64)
+}
+
+pub struct CallSite {
+    // The callee's symbol; empty for a call through a pointer or closure.
+    pub callee: String
+    pub args: Vec(Arg)
+    pub at: (i64, i64)
+}
+
+pub fn no_site() -> CallSite { CallSite { callee: String.new(), args: Vec(Arg).new(), at: nowhere() } }
 
 pub struct Block {
     pub stmts: Vec(Stmt)
@@ -129,23 +147,65 @@ pub struct Decl {
     pub kind: Kind
 }
 
-// A fact about locals, `a op b`; `_0` is the result in postconditions.
+// A fact about the function's variables, `a op b`, over linear forms;
+// `_0` is the result in postconditions. A fact that names what the model
+// does not follow is not `stated`: it is never assumed, and never proved.
 pub struct Fact {
     pub op: Cmp
-    pub a: Operand
-    pub b: Operand
+    pub a: linear.Lin
+    pub b: linear.Lin
+    pub stated: bool
 }
 
-pub fn fact(op: Cmp, a: Operand, b: Operand) -> Fact { Fact { op, a, b } }
+impl Fact {
+    pub fn clone(self) -> Fact { Fact { op: self.op, a: self.a.clone(), b: self.b.clone(), stated: self.stated } }
+}
+
+fn form(o: Operand) -> Option(linear.Lin) {
+    match o {
+        Local(l) => Some(linear.Lin.of(l))
+        Const(c) => Some(linear.Lin.num(c))
+        Opaque(_) => None
+    }
+}
+
+pub fn fact(op: Cmp, a: Operand, b: Operand) -> Fact {
+    match (form(a), form(b)) {
+        (Some(x), Some(y)) => Fact { op, a: x, b: y, stated: true }
+        _ => Fact { op, a: linear.Lin.num(0), b: linear.Lin.num(0), stated: false }
+    }
+}
+
+pub fn linear_fact(op: Cmp, sink a: linear.Lin, sink b: linear.Lin) -> Fact { Fact { op, a, b, stated: true } }
+
+pub fn unstated(op: Cmp) -> Fact { Fact { op, a: linear.Lin.num(0), b: linear.Lin.num(0), stated: false } }
 
 pub struct Function {
     pub name: String
+    pub symbol: String
     pub locals: Vec(Decl)
     pub blocks: Vec(Block)
     pub requires: Vec(Fact)
     pub ensures: Vec(Fact)
     // Loop heads and what holds each time control reaches them.
     pub invariants: Vec((i64, Vec(Fact)))
+    // The parameters are locals 1 to `args`.
+    pub args: i64
+    // (local, variable): a view's length, an `inout` parameter's integer.
+    pub lengths: Vec((i64, i64))
+    pub derefs: Vec((i64, i64))
+    // (variable, its value on entry), for the parameters' variables.
+    pub entries: Vec((i64, i64))
+}
+
+// A function without contracts, parameters or extra variables.
+pub fn function(name: str, sink locals: Vec(Decl), sink blocks: Vec(Block)) -> Function {
+    Function {
+        name: name.to_string(), symbol: name.to_string(), locals, blocks,
+        requires: Vec(Fact).new(), ensures: Vec(Fact).new(),
+        invariants: Vec((i64, Vec(Fact))).new(), args: 0, lengths: Vec((i64, i64)).new(),
+        derefs: Vec((i64, i64)).new(), entries: Vec((i64, i64)).new()
+    }
 }
 
 pub fn i64_range() -> Kind { Kind.Int(-(1 << 63), (1 << 63) - 1) }
@@ -323,14 +383,50 @@ impl Gen {
             Some(ls) => {
                 for l in ls { self.obligation(f, p, what, l.clone()) }
             }
-            None => self.errors.push(f.name.as_str() + ": bb" + p.block.to_string() + ": " + what + ": `!=` is not linear")
+            // `!=` is not one conjunction of linear facts.
+            None => self.unknown(f, p, what)
         }
     }
 }
 
+// The form with each variable replaced by its value on this path.
+fn value(p: Path, x: linear.Lin) -> Option(linear.Lin) {
+    var out = linear.Lin.num(x.constant)
+    for v in 0..x.vars() {
+        let c = x.coef(v)
+        if c != 0 {
+            if v >= p.state.len() { return None }
+            match p.state[v] {
+                Num(y) => {
+                    let Some(z) = scaled(y.clone(), c) else { return None }
+                    out = out.plus(z)
+                }
+                _ => return None
+            }
+        }
+    }
+    Some(out)
+}
+
+// The form with each variable replaced by the form the map gives it.
+fn substitute(x: linear.Lin, map: [Option(linear.Lin)]) -> Option(linear.Lin) {
+    var out = linear.Lin.num(x.constant)
+    for v in 0..x.vars() {
+        let c = x.coef(v)
+        if c != 0 {
+            if v >= map.len { return None }
+            let Some(y) = map[v] else { return None }
+            let Some(z) = scaled(y.clone(), c) else { return None }
+            out = out.plus(z)
+        }
+    }
+    Some(out)
+}
+
 fn condition(p: Path, x: Fact) -> Option(Fact2) {
-    let Some(a) = operand(p, x.a) else { return None }
-    let Some(b) = operand(p, x.b) else { return None }
+    if !x.stated { return None }
+    let Some(a) = value(p, x.a) else { return None }
+    let Some(b) = value(p, x.b) else { return None }
     Some(Fact2 { op: x.op, a, b })
 }
 
@@ -370,6 +466,31 @@ fn start(f: Function, block: i64, facts: [Fact]) -> Path {
             Other => p.state.push(Sym.Unknown)
         }
     }
+    // On entry, a parameter's value on entry is its value. At a loop head,
+    // so is that of a variable the function never assigns, and `requires`
+    // still holds of such variables.
+    let fixed = if block == 0 { Vec(bool).filled(f.locals.len(), true) } else { unassigned(f) }
+    for e in f.entries {
+        if e.0 < p.state.len() && e.1 < p.state.len() && fixed[e.0] {
+            p.state[e.1] = Sym.Num(linear.Lin.of(e.0))
+        }
+    }
+    if block != 0 {
+        for x in f.requires {
+            var all = x.stated
+            for l in [x.a.clone(), x.b.clone()] {
+                for v in 0..l.vars() {
+                    if l.coef(v) != 0 && (v >= fixed.len() || !fixed[v]) { all = false }
+                }
+            }
+            if all {
+                match condition(p, x) {
+                    Some(c) => assume(&p, c)
+                    None => {}
+                }
+            }
+        }
+    }
     for x in facts {
         match condition(p, x) {
             Some(c) => assume(&p, c)
@@ -377,6 +498,32 @@ fn start(f: Function, block: i64, facts: [Fact]) -> Path {
         }
     }
     p
+}
+
+// Per variable: nothing in the function gives it a new value (no
+// assignment, call result or lending), so it keeps its value on entry.
+fn unassigned(f: Function) -> Vec(bool) {
+    var out = Vec(bool).filled(f.locals.len(), true)
+    for b in f.blocks {
+        for st in b.stmts {
+            match st {
+                Assign(dst, _, _) => if dst >= 0 && dst < out.len() { out[dst] = false }
+            }
+        }
+        match b.term {
+            Call(dst, _, site) => {
+                if dst >= 0 && dst < out.len() { out[dst] = false }
+                for a in site.args {
+                    match a {
+                        Lent(x) => if x >= 0 && x < out.len() { out[x] = false }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 fn clone_path(p: Path, block: i64) -> Path {
@@ -397,9 +544,8 @@ fn holds(inout g: Gen, f: Function, p: Path, what: str, facts: [Fact], inv: i64)
         if inv >= 0 { g.source = (inv, j) }
         match condition(p, x) {
             Some(c) => g.require(f, p, what, c)
-            None => g.errors.push(
-                f.name.as_str() + ": " + what + ": a fact names a bool or opaque local"
-            )
+            // A fact over what the model does not follow is never proved.
+            None => g.unknown(f, p, what)
         }
     }
 }
@@ -623,8 +769,167 @@ fn havoc_or(inout p: Path, f: Function, dst: i64, sink value: Sym, why: i64) {
     }
 }
 
+fn copy(x: Option(linear.Lin)) -> Option(linear.Lin) {
+    match x {
+        Some(l) => Some(l.clone())
+        None => None
+    }
+}
+
+fn find(all: [Function], symbol: str) -> Option(i64) {
+    if symbol.len == 0 { return None }
+    for i, c in all {
+        if c.symbol == symbol { return Some(i) }
+    }
+    None
+}
+
+fn lookup(pairs: [(i64, i64)], key: i64) -> Option(i64) {
+    for x in pairs {
+        if x.0 == key { return Some(x.1) }
+    }
+    None
+}
+
+// A call: the variables lent to it and its result get new values. When the
+// callee has a contract, its `requires` must hold here, with the arguments
+// for its parameters, and its `ensures` holds after, over the new values.
+fn call(
+    inout g: Gen,
+    f: Function,
+    all: [Function],
+    p: Path,
+    dst: i64,
+    next: i64,
+    site: CallSite
+) -> Path {
+    // `here` is `p` with the variables the arguments need.
+    var here = clone_path(p, p.block)
+    here.steps = p.steps
+    let found = find(all, site.callee.as_str())
+    var pre = Vec(Option(linear.Lin)).new()
+    if found.is_some() {
+        let c = all[found.unwrap()]
+        for _ in 0..c.locals.len() { pre.push(None) }
+        for i in 1..c.args + 1 {
+            if i - 1 >= site.args.len() || i >= c.locals.len() { break }
+            let a = site.args[i - 1]
+            match c.locals[i].kind {
+                Int(_, _) => pre[i] = Some(match a {
+                    Value(o) => match o {
+                        Opaque(w) => fresh(&here, c.locals[i].kind, w)
+                        _ => match operand(here, o) {
+                            Some(x) => x
+                            None => fresh(&here, c.locals[i].kind, WHY_UNSTATED)
+                        }
+                    }
+                    _ => fresh(&here, c.locals[i].kind, WHY_UNSTATED)
+                })
+                Other => {}
+            }
+            match lookup(c.lengths.as_slice(), i) {
+                Some(n) => if n < c.locals.len() {
+                    pre[n] = Some(match a {
+                        View(m) => match here.state[m] {
+                            Num(x) => x.clone()
+                            _ => fresh(&here, len_range(), WHY_OTHER)
+                        }
+                        _ => fresh(&here, len_range(), WHY_OTHER)
+                    })
+                }
+                None => {}
+            }
+            match lookup(c.derefs.as_slice(), i) {
+                Some(d) => if d < c.locals.len() {
+                    pre[d] = Some(match a {
+                        Lent(x) => match here.state[x] {
+                            Num(y) => y.clone()
+                            _ => fresh(&here, c.locals[d].kind, WHY_OTHER)
+                        }
+                        _ => fresh(&here, c.locals[d].kind, WHY_OTHER)
+                    })
+                }
+                None => {}
+            }
+        }
+        for e in c.entries {
+            if e.0 < pre.len() && e.1 < pre.len() { pre[e.1] = copy(pre[e.0]) }
+        }
+        let what = "requires of " + c.symbol.as_str()
+        for x in c.requires {
+            let a = if x.stated { substitute(x.a, pre.as_slice()) } else { None }
+            let b = if x.stated { substitute(x.b, pre.as_slice()) } else { None }
+            match (a, b) {
+                (Some(a), Some(b)) => g.require(f, here, what.as_str(), Fact2 { op: x.op, a, b })
+                _ => g.unknown(f, here, what.as_str())
+            }
+        }
+    }
+    var q = clone_path(here, next)
+    // New values for what the call may change.
+    var lent = Vec((i64, linear.Lin)).new()
+    for a in site.args {
+        match a {
+            Lent(x) => match f.locals[x].kind {
+                Int(_, _) => lent.push((x, fresh(&q, f.locals[x].kind, WHY_CALL)))
+                Other => {}
+            }
+            _ => {}
+        }
+    }
+    let result = if dst >= 0 {
+        match f.locals[dst].kind {
+            Int(_, _) => Some(fresh(&q, f.locals[dst].kind, WHY_CALL))
+            Other => None
+        }
+    } else { None }
+    match found {
+        Some(ci) => {
+            let c = all[ci]
+            var post = Vec(Option(linear.Lin)).new()
+            for x in pre { post.push(copy(x)) }
+            for d in c.derefs {
+                if d.1 < post.len() {
+                    post[d.1] = None
+                    let i = d.0
+                    if i >= 1 && i - 1 < site.args.len() {
+                        match site.args[i - 1] {
+                            Lent(x) => {
+                                for y in lent {
+                                    if y.0 == x { post[d.1] = Some(y.1.clone()) }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if post.len() > 0 {
+                post[0] = copy(result)
+            }
+            for x in c.ensures {
+                if x.stated {
+                    match (substitute(x.a, post.as_slice()), substitute(x.b, post.as_slice())) {
+                        (Some(a), Some(b)) => assume(&q, Fact2 { op: x.op, a, b })
+                        _ => {}
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    for y in lent { q.state[y.0] = Sym.Num(y.1.clone()) }
+    if dst >= 0 {
+        match copy(result) {
+            Some(r) => q.state[dst] = Sym.Num(r)
+            None => havoc_or(&q, f, dst, Sym.Unknown, WHY_CALL)
+        }
+    }
+    q
+}
+
 // Follows one path to its end: a return, a loop head or a trap.
-fn walk(inout g: Gen, f: Function, sink first: Path) {
+fn walk(inout g: Gen, f: Function, all: [Function], sink first: Path) {
     var work = Vec(Path).new()
     work.push(first)
     var followed = 0
@@ -712,9 +1017,10 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
             Any(targets) => {
                 for t in targets { work.push(clone_path(p, t)) }
             }
-            Call(dst, next) => {
-                var q = clone_path(p, next)
-                if dst >= 0 { havoc_or(&q, f, dst, Sym.Unknown, WHY_CALL) }
+            Call(dst, next, site) => {
+                g.at = site.at
+                let q = call(&g, f, all, p, dst, next, site)
+                g.at = nowhere()
                 work.push(q)
             }
             Trap => {}
@@ -735,12 +1041,19 @@ pub struct Obligations {
 // The obligations of a function: from its entry under `requires`, and from
 // each loop head under its invariant.
 pub fn generate(f: Function) -> Obligations {
+    let none = Vec(Function).new()
+    generate_with(f, none.as_slice())
+}
+
+// The same, where a call to one of `all` proves its `requires` and
+// assumes its `ensures`.
+pub fn generate_with(f: Function, all: [Function]) -> Obligations {
     var g = Gen {
         out: Vec(Obligation).new(), errors: Vec(String).new(), at: nowhere(), source: nowhere()
     }
-    walk(&g, f, start(f, 0, f.requires.as_slice()))
+    walk(&g, f, all, start(f, 0, f.requires.as_slice()))
     for inv in f.invariants {
-        walk(&g, f, start(f, inv.0, inv.1.as_slice()))
+        walk(&g, f, all, start(f, inv.0, inv.1.as_slice()))
     }
     match g {
         Gen { out, errors, .. } => Obligations { list: out, errors }

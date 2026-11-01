@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the model over a corpus of real programs: a jihoo checkout's
 tests/run and examples. For each file, every function of its own module
-must load and verify without contracts, and differential.py must find no
+must load and verify with the contracts its source states, and differential.py must find no
 check that was proved and fails.
 
     corpus.py --compiler JIHOO --checkout ../jihoo [--count N] [--filter TEXT]
@@ -59,7 +59,7 @@ def main():
             model.write_text(emitted.stdout)
             own = re.findall(r"^\(function (\S+) main\.", emitted.stdout, re.M)
             infer = ["--infer"] if args.infer else []
-            verified = run(verifier, "--machine", *infer, model, HERE / "samples/none.contracts", *own)
+            verified = run(verifier, "--machine", *infer, model, *own)
             if verified.returncode:
                 load_errors.append(f"{name}: {(verified.stderr or verified.stdout).strip()[:300]}")
                 continue

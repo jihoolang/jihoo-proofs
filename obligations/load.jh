@@ -1,6 +1,7 @@
-// Reads `jihoo emit-obligations` output into the model, and contracts
-// (requires, ensures, loop invariants) from a file of their own until jihoo
-// has syntax for them. Reading is trusted: it is part of the semantics.
+// Reads `jihoo emit-obligations` output into the model, with each
+// function's contract (requires, ensures, loop invariants) as the source
+// states it. Reading is trusted: it is part of the semantics.
+import linear
 import sexp
 import vc
 
@@ -83,6 +84,58 @@ fn operand(x: sexp.Sexp) -> Result(vc.Operand, String) {
     }
 }
 
+fn argument(x: sexp.Sexp) -> Result(vc.Arg, String) {
+    match tag(x)? {
+        "view" => Ok(vc.Arg.View(index(head(x, "view", 1)?[0])?))
+        "lent" => Ok(vc.Arg.Lent(index(head(x, "lent", 1)?[0])?))
+        _ => Ok(vc.Arg.Value(operand(x)?))
+    }
+}
+
+// `(lin c (v k)...)`: `c` plus `k` times each variable `v`; None for
+// `(opaque why)`, which the model does not follow.
+fn form(x: sexp.Sexp, vars: i64) -> Result(Option(linear.Lin), String) {
+    if tag(x)? == "opaque" { return Ok(None) }
+    let xs = x.list()?
+    if xs.len < 2 || xs[0].atom()? != "lin" { return Err("expected (lin c (v k)...)") }
+    let c = int(xs[1])?
+    if !small(c) { return Ok(None) }
+    var out = linear.Lin.num(c)
+    for i in 2..xs.len {
+        let ps = xs[i].list()?
+        if ps.len != 2 { return Err("expected (variable coefficient)") }
+        let v = index(ps[0])?
+        let k = int(ps[1])?
+        if v < 0 || v >= vars { return Err("no variable " + v.to_string()) }
+        if !small(k) { return Ok(None) }
+        out = out.plus(linear.Lin.of(v).scale(k))
+    }
+    Ok(Some(out))
+}
+
+// `(op A B)`, a clause of a contract.
+fn clause(x: sexp.Sexp, vars: i64) -> Result(vc.Fact, String) {
+    let xs = x.list()?
+    if xs.len != 3 { return Err("expected (op a b)") }
+    let op = cmp(xs[0].atom()?)?
+    match (form(xs[1], vars)?, form(xs[2], vars)?) {
+        (Some(a), Some(b)) => Ok(vc.linear_fact(op, a, b))
+        _ => Ok(vc.unstated(op))
+    }
+}
+
+fn pairs(x: sexp.Sexp, name: str) -> Result(Vec((i64, i64)), String) {
+    let xs = x.list()?
+    if xs.len == 0 || xs[0].atom()? != name { return Err("expected (" + name + " ...)") }
+    var out = Vec((i64, i64)).new()
+    for p in xs[1..] {
+        let ps = p.list()?
+        if ps.len != 2 { return Err("expected (a b) in " + name) }
+        out.push((index(ps[0])?, index(ps[1])?))
+    }
+    Ok(out)
+}
+
 fn cmp(name: str) -> Result(vc.Cmp, String) {
     match name {
         "lt" => Ok(vc.Cmp.Lt)
@@ -138,10 +191,22 @@ fn term(x: sexp.Sexp) -> Result(vc.Term, String) {
             for i in 1..xs.len { bs.push(index(xs[i])?) }
             Ok(vc.Term.Any(bs))
         }
+        // `(call DST NEXT [(fn SYMBOL)] (args A...) (at lo hi))`.
         "call" => {
-            let ps = head(x, "call", 2)?
-            let dst = if ps[0].atom()? == "_" { -1 } else { index(ps[0])? }
-            Ok(vc.Term.Call(dst, index(ps[1])?))
+            if xs.len < 3 { return Err("expected (call dst next ...)") }
+            let dst = if xs[1].atom()? == "_" { -1 } else { index(xs[1])? }
+            var site = vc.no_site()
+            for i in 3..xs.len {
+                match tag(xs[i])? {
+                    "fn" => site.callee = head(xs[i], "fn", 1)?[0].atom()?.to_string()
+                    "args" => {
+                        for a in xs[i].list()?[1..] { site.args.push(argument(a)?) }
+                    }
+                    "at" => site.at = at(xs[i])?
+                    t => return Err("unknown part of a call `" + t + "`")
+                }
+            }
+            Ok(vc.Term.Call(dst, index(xs[2])?, site))
         }
         "trap" => Ok(vc.Term.Trap)
         "return" => Ok(vc.Term.Return)
@@ -168,6 +233,9 @@ fn kind(x: sexp.Sexp) -> Result(vc.Kind, String) {
     }
 }
 
+// `(function NAME SYMBOL (args N) (locals ...) (lengths ...) (derefs ...)
+// (entries ...) (requires ...)... (ensures ...)... (invariant B ...)...
+// (block 0 ...)...)`.
 fn function(x: sexp.Sexp) -> Result(vc.Function, String) {
     let xs = x.list()?
     if xs.len < 5 || xs[0].atom()? != "function" { return Err("expected (function ...)") }
@@ -176,72 +244,76 @@ fn function(x: sexp.Sexp) -> Result(vc.Function, String) {
     for i in 1..ks.len {
         locals.push(vc.Decl { name: "_" + (i - 1).to_string(), kind: kind(ks[i])? })
     }
+    let vars = locals.len()
+    var f = vc.function(xs[1].atom()?, locals, Vec(vc.Block).new())
+    f.symbol = xs[2].atom()?.to_string()
+    f.args = index(head(xs[3], "args", 1)?[0])?
     var blocks = Vec(vc.Block).new()
-    for j in 6..xs.len {
-        let bs = xs[j].list()?
-        if bs.len < 3 || bs[0].atom()? != "block" || index(bs[1])? != blocks.len() {
-            return Err("expected (block " + blocks.len().to_string() + " ...)")
-        }
-        var stmts = Vec(vc.Stmt).new()
-        for k in 2..bs.len - 1 {
-            let ps = bs[k].list()?
-            if (ps.len != 3 && ps.len != 4) || ps[0].atom()? != "set" {
-                return Err("expected (set local value [at])")
+    for j in 5..xs.len {
+        let ps = xs[j].list()?
+        match tag(xs[j])? {
+            "lengths" => f.lengths = pairs(xs[j], "lengths")?
+            "derefs" => f.derefs = pairs(xs[j], "derefs")?
+            "entries" => f.entries = pairs(xs[j], "entries")?
+            // Each clause with its span, `(requires (op A B) (at lo hi))`.
+            "requires" => {
+                if ps.len != 3 { return Err("expected (requires clause (at lo hi))") }
+                f.requires.push(clause(ps[1], vars)?)
             }
-            let place = if ps.len == 4 { at(ps[3])? } else { vc.nowhere() }
-            stmts.push(vc.Stmt.Assign(index(ps[1])?, rvalue(ps[2])?, place))
+            "ensures" => {
+                if ps.len != 3 { return Err("expected (ensures clause (at lo hi))") }
+                f.ensures.push(clause(ps[1], vars)?)
+            }
+            "invariant" => {
+                if ps.len != 4 { return Err("expected (invariant block clause (at lo hi))") }
+                let b = index(ps[1])?
+                let c = clause(ps[2], vars)?
+                var found = false
+                for i in 0..f.invariants.len() {
+                    if f.invariants[i].0 == b {
+                        f.invariants[i].1.push(c.clone())
+                        found = true
+                    }
+                }
+                if !found {
+                    var cs = Vec(vc.Fact).new()
+                    cs.push(c)
+                    f.invariants.push((b, cs))
+                }
+            }
+            "block" => {
+                if ps.len < 3 || index(ps[1])? != blocks.len() {
+                    return Err("expected (block " + blocks.len().to_string() + " ...)")
+                }
+                var stmts = Vec(vc.Stmt).new()
+                for k in 2..ps.len - 1 {
+                    let qs = ps[k].list()?
+                    if (qs.len != 3 && qs.len != 4) || qs[0].atom()? != "set" {
+                        return Err("expected (set local value [at])")
+                    }
+                    let place = if qs.len == 4 { at(qs[3])? } else { vc.nowhere() }
+                    stmts.push(vc.Stmt.Assign(index(qs[1])?, rvalue(qs[2])?, place))
+                }
+                blocks.push(vc.Block { stmts, term: term(ps[ps.len - 1])? })
+            }
+            t => return Err("unknown part of a function `" + t + "`")
         }
-        blocks.push(vc.Block { stmts, term: term(bs[bs.len - 1])? })
     }
-    Ok(vc.Function {
-        name: xs[1].atom()?.to_string()
-        locals
-        blocks
-        requires: Vec(vc.Fact).new()
-        ensures: Vec(vc.Fact).new()
-        invariants: Vec((i64, Vec(vc.Fact))).new()
-    })
+    for p in f.lengths {
+        if p.1 >= vars { return Err("no variable " + p.1.to_string()) }
+    }
+    for p in f.derefs {
+        if p.1 >= vars { return Err("no variable " + p.1.to_string()) }
+    }
+    for p in f.entries {
+        if p.0 >= vars || p.1 >= vars { return Err("no variable in entries") }
+    }
+    f.blocks = blocks
+    Ok(f)
 }
 
 pub fn functions(text: str) -> Result(Vec(vc.Function), String) {
     var out = Vec(vc.Function).new()
     for x in sexp.parse(text)? { out.push(function(x)?) }
     Ok(out)
-}
-
-fn facts(xs: [sexp.Sexp]) -> Result(Vec(vc.Fact), String) {
-    var out = Vec(vc.Fact).new()
-    for x in xs {
-        let ps = x.list()?
-        if ps.len != 3 { return Err("expected (op a b)") }
-        out.push(vc.fact(cmp(ps[0].atom()?)?, operand(ps[1])?, operand(ps[2])?))
-    }
-    Ok(out)
-}
-
-// `(contract NAME (requires F...) (ensures F...) (invariant BLOCK F...)...)`
-// adds to the function of that name; the names of the others are returned.
-pub fn contracts(text: str, inout fs: Vec(vc.Function)) -> Result(Vec(String), String) {
-    var names = Vec(String).new()
-    for x in sexp.parse(text)? {
-        let xs = x.list()?
-        if xs.len < 2 || xs[0].atom()? != "contract" { return Err("expected (contract ...)") }
-        let name = xs[1].atom()?
-        var found = -1
-        for i in 0..fs.len() {
-            if fs[i].name == name { found = i }
-        }
-        if found < 0 { return Err("no function `" + name + "`") }
-        names.push(name.to_string())
-        for j in 2..xs.len {
-            let ps = xs[j].list()?
-            match ps[0].atom()? {
-                "requires" => fs[found].requires = facts(ps[1..ps.len])?
-                "ensures" => fs[found].ensures = facts(ps[1..ps.len])?
-                "invariant" => fs[found].invariants.push((index(ps[1])?, facts(ps[2..ps.len])?))
-                t => return Err("unknown contract part `" + t + "`")
-            }
-        }
-    }
-    Ok(names)
 }

@@ -1,6 +1,9 @@
 // The functions of models.jh, as source: `emit-obligations` of this file
 // must give the same verdicts as the hand-written models.
-fn clamp(x: i64, lo: i64, hi: i64) -> i64 {
+fn clamp(x: i64, lo: i64, hi: i64) -> i64
+    requires lo <= hi
+    ensures lo <= result && result <= hi
+{
     if x < lo { return lo }
     if x > hi { return hi }
     x
@@ -9,7 +12,9 @@ fn clamp(x: i64, lo: i64, hi: i64) -> i64 {
 fn sum(xs: [i64]) -> i64 {
     var s = 0
     var i = 0
-    while i < xs.len {
+    while i < xs.len
+        invariant 0 <= i && i <= xs.len
+    {
         s += xs[i]
         i += 1
     }

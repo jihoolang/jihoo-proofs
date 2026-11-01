@@ -5,7 +5,9 @@
 fn last(xs: [i64]) -> i64 {
     var s = 0
     var i = 0
-    while i <= xs.len {
+    while i <= xs.len
+        invariant 0 <= i
+    {
         s = xs[i]
         i += 1
     }
@@ -18,14 +20,20 @@ fn bump(inout x: i64) {
 
 // `x` changes through the borrow `bump` takes: its value after the call is
 // not `n`.
-fn after_call(n: i64) -> i64 {
+fn after_call(n: i64) -> i64
+    requires n <= 10
+    ensures result <= 10
+{
     var x = n
     bump(&x)
     x
 }
 
 // A multiplication by a constant is linear.
-fn scale(x: i64) -> i64 {
+fn scale(x: i64) -> i64
+    requires 0 <= x && x <= 1000
+    ensures result <= 4000
+{
     x * 4
 }
 
