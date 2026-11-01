@@ -205,6 +205,20 @@ in what they proved: `emit-obligations` overflowed computing `i128`'s range;
 the verifier overflowed on 128-bit ranges; and it followed loops without
 invariants by unrolling them, so a few branches in a loop took 30 GB.
 
+The compiler now has its own verifier
+([`jihoo verify`](https://github.com/jihoolang/jihoo/blob/main/docs/reference/command-line.md#verification)),
+built from this experiment, which removes the checks it proves.
+`--verdicts compiler` makes `differential.py` and `corpus.py` test its
+verdicts (`jihoo verify --machine`) instead of `emitted.jh`'s; they are not
+modular, since the compiler already counts a proof that rests on an
+unproved contract as unproved. Over the samples and the corpus it finds no
+bug:
+
+```sh
+python3 obligations/differential.py --compiler jihoo obligations/samples/calls.jh --verdicts compiler
+python3 obligations/corpus.py --compiler jihoo --checkout ../jihoo --infer --verdicts compiler
+```
+
 Random inputs find a wrong rule only on inputs that reach it: a model that
 believed slices hold at most 1,000 elements would pass, since the probes'
 slices are short.
