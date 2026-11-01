@@ -322,8 +322,17 @@ def main():
             live.remove(k)
             name, vals = probes[k][0], probes[k][1]
             lo, hi = d["span"]["start"]["byte"], d["span"]["end"]["byte"]
+            here = d["span"]["file"] == str(path)
             where = f"{name}{tuple(vals)}: {d['message']} at bytes {lo}..{hi}"
-            if lo >= prefix:
+            # A panic in a callee fails with the callee's message: the calls
+            # that led there, innermost first, are the call to the function
+            # that never returns (its check) and the call to the function
+            # that reached it (a check when the caller proved its panics
+            # away).
+            chain = [(n["span"]["start"]["byte"], n["span"]["end"]["byte"]) for n in d["notes"]
+                     if n["message"].startswith("in compile-time call to") and n["span"]
+                     and n["span"]["file"] == str(path) and n["span"]["start"]["byte"] < prefix][:2]
+            if here and lo >= prefix:
                 if ensures.get(name) and name in assumed:
                     results["failed under an unproved contract"] += 1
                 elif ensures.get(name):
@@ -331,18 +340,21 @@ def main():
                     bugs.append(where + " (ensures was proved)")
                 else:
                     results["ensures failed"] += 1
-            elif (lo, hi) in checks and lo < prefix:
-                owner, proved = checks[(lo, hi)]
-                if proved and owner in assumed:
+            else:
+                spans = [(lo, hi)] if here and (lo, hi) in checks else chain
+                known = [x for x in spans if x in checks]
+                proved = [x for x in known if checks[x][1]]
+                if proved and checks[proved[0]][0] in assumed:
                     results["failed under an unproved contract"] += 1
                 elif proved:
                     results["bug"] += 1
-                    bugs.append(where + f" (proved in {owner})")
-                else:
+                    bugs.append(where + f" (proved in {checks[proved[0]][0]} at bytes "
+                                f"{proved[0][0]}..{proved[0][1]})")
+                elif known:
                     results["unproved check failed"] += 1
-            else:
-                results["unmodelled failure"] += 1
-                unmodelled.append(where)
+                else:
+                    results["unmodelled failure"] += 1
+                    unmodelled.append(where)
         results["passed"] = len(live)
 
     report = {"sample": str(args.sample), "seed": args.seed, "release": args.release, "infer": args.infer,

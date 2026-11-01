@@ -1,0 +1,78 @@
+// Fields as variables, and panics a call rules out: a local struct's
+// field changes only where the model sees it change (an assignment, or a
+// call it is lent to, which the callee's `ensures` describes), and a call
+// to a small function that may panic is a check at the call.
+
+struct Buf {
+    len: i64
+}
+
+impl Buf {
+    fn len(self) -> i64
+        ensures result == self.len
+    {
+        self.len
+    }
+
+    fn grow(inout self, n: i64)
+        requires 0 <= n && n <= 1000 && 0 <= self.len && self.len <= 1000
+        ensures self.len == old(self.len) + n
+    {
+        self.len += n
+    }
+
+    fn at(self, i: i64) -> i64 {
+        if (i as u64) >= (self.len as u64) {
+            panic("index out of bounds")
+        }
+        i
+    }
+}
+
+// Proved: `i` is within the buffer the calls made.
+fn inside(n: i64, i: i64) -> i64
+    requires 0 <= n && n <= 100
+{
+    var b = Buf { len: 0 }
+    b.grow(n)
+    b.grow(1)
+    if i < 0 || i > n {
+        return 0
+    }
+    b.at(i)
+}
+
+// Not proved: `i` may be `n + 1`.
+fn edge(n: i64, i: i64) -> i64
+    requires 0 <= n && n <= 100
+{
+    var b = Buf { len: 0 }
+    b.grow(n)
+    b.grow(1)
+    if i < 0 || i > n + 1 {
+        return 0
+    }
+    b.at(i)
+}
+
+// A field written directly, then read back.
+fn direct(n: i64) -> i64
+    requires 0 <= n && n < 1000
+    ensures result == n + 1
+{
+    var b = Buf { len: n }
+    b.len = b.len + 1
+    b.len()
+}
+
+// Not proved: a `!=` the caller cannot rule out.
+fn unequal(x: i64, y: i64) -> i64 {
+    if x != y {
+        panic("unequal")
+    }
+    x
+}
+
+fn main() {
+    println(inside(3, 2) + edge(3, 2) + direct(4) + unequal(1, 1))
+}

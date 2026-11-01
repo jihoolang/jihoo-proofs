@@ -74,6 +74,7 @@ fn assigned_in(f: vc.Function) -> Vec(i64) {
                         _ => {}
                     }
                 }
+                for x in site.changes { here[x] = true }
             }
             _ => {}
         }

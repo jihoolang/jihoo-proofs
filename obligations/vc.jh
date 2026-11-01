@@ -127,9 +127,14 @@ pub struct CallSite {
     pub callee: String
     pub args: Vec(Arg)
     pub at: (i64, i64)
+    // The variables the call may change besides its result and its `Lent`
+    // arguments: fields inside what it is lent or where its result goes.
+    pub changes: Vec(i64)
 }
 
-pub fn no_site() -> CallSite { CallSite { callee: String.new(), args: Vec(Arg).new(), at: nowhere() } }
+pub fn no_site() -> CallSite {
+    CallSite { callee: String.new(), args: Vec(Arg).new(), at: nowhere(), changes: Vec(i64).new() }
+}
 
 pub struct Block {
     pub stmts: Vec(Stmt)
@@ -519,6 +524,9 @@ fn unassigned(f: Function) -> Vec(bool) {
                         _ => {}
                     }
                 }
+                for x in site.changes {
+                    if x >= 0 && x < out.len() { out[x] = false }
+                }
             }
             _ => {}
         }
@@ -875,6 +883,12 @@ fn call(
                 Other => {}
             }
             _ => {}
+        }
+    }
+    for x in site.changes {
+        match f.locals[x].kind {
+            Int(_, _) => lent.push((x, fresh(&q, f.locals[x].kind, WHY_CALL)))
+            Other => {}
         }
     }
     let result = if dst >= 0 {
