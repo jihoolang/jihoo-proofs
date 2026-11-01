@@ -1,8 +1,10 @@
 // Verifies the functions a contracts file names, and any others named after
 // it, from `emit-obligations` output:
-// `emitted [--machine] <obligations> <contracts> [names...]`.
+// `emitted [--machine] [--infer] <obligations> <contracts> [names...]`;
+// `--infer` proposes invariants for the loops that have none.
 import std.env
 import std.fs
+import infer
 import load
 import verify
 
@@ -17,6 +19,8 @@ fn main() {
     var args = env.args()
     let machine = args.len() > 1 && args[1] == "--machine"
     if machine { args.remove(1) }
+    let guess = args.len() > 1 && args[1] == "--infer"
+    if guess { args.remove(1) }
     if args.len() < 3 { panic("usage: emitted [--machine] <obligations> <contracts> [names...]") }
     var fs = match load.functions(read(args[1]).as_str()) {
         Ok(fs) => fs
@@ -33,12 +37,14 @@ fn main() {
         }
         if !named { names.push(args[i].to_string()) }
     }
-    for f in fs {
+    for f in fs.into_iter() {
+        var wanted = false
         for n in names {
-            if f.name == n {
-                let r = verify.verify(f)
-                print(if machine { r.machine() } else { r.text() })
-            }
+            if f.name == n { wanted = true }
+        }
+        if wanted {
+            let r = if guess { verify.verify(infer.infer(f)) } else { verify.verify(f) }
+            print(if machine { r.machine() } else { r.text() })
         }
     }
 }

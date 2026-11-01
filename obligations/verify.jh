@@ -69,7 +69,10 @@ impl Report {
 
     pub fn text(self) -> String {
         var out = self.function.as_str() + ": " + self.proved().to_string() + " of " +
-            self.results.len().to_string() + " obligations proved\n"
+            self.results.len().to_string() + " obligations proved"
+        // With errors some paths were not followed, so nothing is proved.
+        if self.errors.len() > 0 { out += " on the paths followed; INCOMPLETE" }
+        out += "\n"
         for r in self.results {
             match r.verdict {
                 Proved(n) => out += "  proved   " + r.what.as_str() + " (" + n.to_string() + " facts)\n"

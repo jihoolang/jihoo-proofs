@@ -147,14 +147,17 @@ BUG after_call(10,): compile-time evaluation reached a trap at bytes 2817..2823 
 `corpus.py` does the same for real programs: every function of every
 file in a jihoo checkout's `tests/run` and `examples` is loaded and
 verified without contracts, and `differential.py` runs on each file.
-`check.py --corpus ../jihoo` includes it. Over the 98 files of jihoo 0.4.2:
+`check.py --corpus ../jihoo` includes it, with inferred invariants. Over
+the 98 files of jihoo 0.4.2:
 
 ```text
-364 functions, 317 checks, 25 proved, 270 probes, 12 unproved checks failed, 0 bugs
+                     364 functions, 317 checks, 270 probes, 0 bugs
+without --infer      25 checks proved
+with --infer         66 checks proved
 ```
 
-Few checks are proved because most of them are in loops, and loops without
-invariants prove nothing (see below). The 37 failures outside the model are
+Most checks are in loops, and a loop without an invariant proves nothing
+(see below); inference supplies the simple ones. The 37 failures outside the model are
 the interpreter's limits (printing, statics, intrinsics, call depth), not
 checks the model missed. The first runs found three bugs in the tools, none
 in what they proved: `emit-obligations` overflowed computing `i128`'s range;
@@ -164,6 +167,20 @@ invariants by unrolling them, so a few branches in a loop took 30 GB.
 Random inputs find a wrong rule only on inputs that reach it: a model that
 believed slices hold at most 1,000 elements would pass, since the probes'
 slices are short.
+
+## Inferring loop invariants
+
+`infer.jh` proposes invariants for the loop heads that have none (the
+targets of back edges), Houdini-style: for each integer that a loop
+counts with (assigned in two blocks or more) it proposes `0 <= v`, and
+`v <= w` and `w <= v` for every other counter and every value the
+function never assigns (arguments, lengths). All of them are assumed at
+once; each one that is not proved on entry or after an iteration is
+dropped, until the rest are. `emitted.jh --infer`, `differential.py
+--infer` and `corpus.py --infer` use it. It is untrusted: `verify` checks
+the invariants it returns like written ones, and `tests.jh` checks that
+an off-by-one loop stays unproved with inference. For `sum` without its
+written invariant, it finds `0 <= i <= xs.len`.
 
 ## Next
 

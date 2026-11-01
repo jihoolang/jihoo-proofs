@@ -1,5 +1,6 @@
 // Negative cases: what the checker, the prover and the generator must reject.
 import fm
+import infer
 import linear
 import models
 import vc
@@ -126,4 +127,30 @@ fn checker_refuses_numbers_beyond_its_bounds() {
         linear.check(goal(), linear.certificate([1 << 51, 1 << 51, 1 << 51])).is_err(),
         "large weight"
     )
+}
+
+#[test]
+fn invariants_are_inferred_for_a_loop() {
+    // sum's loop with no invariant: inference finds 0 <= i <= xs.len.
+    var f = models.sum_with(Vec(vc.Fact).new())
+    f.invariants = Vec((i64, Vec(vc.Fact))).new()
+    let r = verify.verify(infer.infer(f))
+    assert(r.errors.len() == 0, "the loop is followed")
+    assert(unproved(r, "bb4: index out of bounds") == 0, "bounds check")
+    assert(r.proved() == r.results.len() - 2, "all but s + xs[i]")
+}
+
+#[test]
+fn inferred_invariants_are_checked() {
+    // The off-by-one loop: no candidate can prove i < xs.len, and the
+    // bounds check stays unproved.
+    var f = models.sum_with(Vec(vc.Fact).new())
+    f.invariants = Vec((i64, Vec(vc.Fact))).new()
+    f.blocks[1].stmts[0] = vc.Stmt.Assign(
+        4,
+        vc.Rvalue.Compare(vc.Cmp.Le, l(3), l(14)),
+        vc.nowhere()
+    )
+    let r = verify.verify(infer.infer(f))
+    assert(unproved(r, "bb4: index out of bounds") == 1, "i < xs.len")
 }

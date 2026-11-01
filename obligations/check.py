@@ -111,7 +111,7 @@ def main():
     corpus = None
     if args.corpus and samples:
         r = run(sys.executable, HERE / "corpus.py", "--compiler", jihoo, "--checkout", args.corpus,
-                "--report", out / "corpus.json", timeout=3600)
+                "--report", out / "corpus.json", "--infer", timeout=3600)
         if r.returncode:
             raise SystemExit(f"corpus:\n{r.stdout[-3000:]}{r.stderr[-3000:]}")
         corpus = json.loads((out / "corpus.json").read_text())["totals"]

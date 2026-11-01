@@ -125,6 +125,7 @@ def main():
     ap.add_argument("--mutate", nargs=2, action="append", default=[])
     ap.add_argument("--report", type=Path)
     ap.add_argument("--release", action="store_true", help="overflow wraps, in the model and the interpreter")
+    ap.add_argument("--infer", action="store_true", help="infer invariants for loops without one")
     ap.add_argument("--verifier", type=Path, help="emitted.jh, already built (else it is compiled and run)")
     args = ap.parse_args()
     jihoo = args.compiler.resolve(strict=True)
@@ -159,7 +160,7 @@ def main():
         names = [n for n in names if n in layout]
         verifier = [args.verifier.resolve()] if args.verifier else \
             [jihoo, "run", "-I", HERE, "-I", ROOT / "kernel", HERE / "emitted.jh", "--"]
-        verified = run(*verifier, "--machine", tmp / "model.obligations",
+        verified = run(*verifier, "--machine", *(["--infer"] if args.infer else []), tmp / "model.obligations",
                        contracts_path if contracts_path.exists() else HERE / "samples/none.contracts",
                        *names)
         if verified.returncode:
@@ -263,7 +264,8 @@ def main():
                 unmodelled.append(where)
         results["passed"] = len(live)
 
-    report = {"sample": str(args.sample), "seed": args.seed, "release": args.release, "probes": len(probes),
+    report = {"sample": str(args.sample), "seed": args.seed, "release": args.release, "infer": args.infer,
+              "probes": len(probes),
               "functions": list(sigs), "results": results, "bugs": bugs, "unmodelled": unmodelled}
     if args.report:
         args.report.write_text(json.dumps(report, indent=2) + "\n")

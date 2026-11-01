@@ -28,6 +28,7 @@ def main():
     ap.add_argument("--checkout", type=Path, required=True)
     ap.add_argument("--count", type=int, default=5)
     ap.add_argument("--filter", default="")
+    ap.add_argument("--infer", action="store_true", help="infer invariants for loops without one")
     ap.add_argument("--report", type=Path, default=ROOT / "out/obligations/corpus.json")
     args = ap.parse_args()
     jihoo = args.compiler.resolve(strict=True)
@@ -54,7 +55,8 @@ def main():
             model = tmp / "model.obligations"
             model.write_text(emitted.stdout)
             own = re.findall(r"^\(function (\S+) main\.", emitted.stdout, re.M)
-            verified = run(verifier, "--machine", model, HERE / "samples/none.contracts", *own)
+            infer = ["--infer"] if args.infer else []
+            verified = run(verifier, "--machine", *infer, model, HERE / "samples/none.contracts", *own)
             if verified.returncode:
                 load_errors.append(f"{name}: {(verified.stderr or verified.stdout).strip()[:300]}")
                 continue
@@ -71,7 +73,7 @@ def main():
 
             report = tmp / "differential.json"
             d = run(sys.executable, HERE / "differential.py", "--compiler", jihoo, f, "--count", args.count,
-                    "--verifier", verifier, "--report", report)
+                    "--verifier", verifier, "--report", report, *infer)
             if d.returncode == 3:
                 bugs.append(f"{name}:\n{d.stdout}")
             elif d.returncode:

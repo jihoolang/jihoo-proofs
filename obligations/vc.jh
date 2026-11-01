@@ -108,6 +108,9 @@ pub struct Obligation {
     pub what: String
     // The check's span; `nowhere()` for invariants and `ensures`.
     pub at: (i64, i64)
+    // For an invariant: its index in `invariants` and the fact's in it;
+    // `nowhere()` otherwise.
+    pub source: (i64, i64)
     pub goal: linear.Goal
 }
 
@@ -218,6 +221,8 @@ struct Gen {
     errors: Vec(String)
     // The span of the check being generated.
     at: (i64, i64)
+    // The invariant fact being checked.
+    source: (i64, i64)
 }
 
 impl Gen {
@@ -236,6 +241,7 @@ impl Gen {
             function: f.name.clone()
             what: "bb" + p.block.to_string() + ": " + what
             at: self.at
+            source: self.source
             goal: linear.Goal { facts, claim }
         })
     }
@@ -317,8 +323,10 @@ fn clone_path(p: Path, block: i64) -> Path {
     }
 }
 
-fn holds(inout g: Gen, f: Function, p: Path, what: str, facts: [Fact]) {
-    for x in facts {
+// Each fact holds on this path; `inv` is the invariant they are, or -1.
+fn holds(inout g: Gen, f: Function, p: Path, what: str, facts: [Fact], inv: i64) {
+    for j, x in facts {
+        if inv >= 0 { g.source = (inv, j) }
         match condition(p, x) {
             Some(c) => g.require(f, p, what, c)
             None => g.errors.push(
@@ -535,7 +543,8 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
             match invariant(f, p.block) {
                 Some(i) => {
                     let what = "invariant of bb" + p.block.to_string()
-                    holds(&g, f, p, what.as_str(), f.invariants[i].1.as_slice())
+                    holds(&g, f, p, what.as_str(), f.invariants[i].1.as_slice(), i)
+                    g.source = nowhere()
                     continue
                 }
                 None => {}
@@ -611,7 +620,7 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
                 work.push(q)
             }
             Trap => {}
-            Return => holds(&g, f, p, "ensures", f.ensures.as_slice())
+            Return => holds(&g, f, p, "ensures", f.ensures.as_slice(), -1)
             Unreachable => g.errors.push(
                 f.name.as_str() + ": bb" + p.block.to_string() + " is reached"
             )
@@ -627,7 +636,9 @@ pub struct Obligations {
 // The obligations of a function: from its entry under `requires`, and from
 // each loop head under its invariant.
 pub fn generate(f: Function) -> Obligations {
-    var g = Gen { out: Vec(Obligation).new(), errors: Vec(String).new(), at: nowhere() }
+    var g = Gen {
+        out: Vec(Obligation).new(), errors: Vec(String).new(), at: nowhere(), source: nowhere()
+    }
     walk(&g, f, start(f, 0, f.requires.as_slice()))
     for inv in f.invariants {
         walk(&g, f, start(f, inv.0, inv.1.as_slice()))
