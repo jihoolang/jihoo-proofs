@@ -1,0 +1,73 @@
+// Calls through contracts: a call proves the callee's `requires` and
+// assumes its `ensures`, so each function is verified once.
+
+fn bump(inout x: i64)
+    requires x < 100
+    ensures x == old(x) + 1
+{
+    x += 1
+}
+
+// `bump`'s `requires` holds, and its `ensures` gives `x == n + 1`.
+fn after_bump(n: i64) -> i64
+    requires 0 <= n && n <= 10
+    ensures result == n + 1
+{
+    var x = n
+    bump(&x)
+    x
+}
+
+// Not proved: `n` may be 100, and then `bump`'s `requires` does not hold.
+fn unchecked_bump(n: i64) -> i64 {
+    var x = n
+    bump(&x)
+    x
+}
+
+fn inc(x: i64) -> i64
+    requires x < 1000
+    ensures result == x + 1
+{
+    x + 1
+}
+
+// The `+` cannot overflow: `inc`'s `ensures` bounds both sides.
+fn twice(x: i64) -> i64
+    requires 0 <= x && x < 1000
+    ensures result == 2 * x + 2
+{
+    inc(x) + inc(x)
+}
+
+// A loop whose invariant carries what the calls promise.
+fn count(n: i64) -> i64
+    requires 0 <= n && n <= 900
+    ensures result == n
+{
+    var c = 0
+    var i = 0
+    while i < n
+        invariant 0 <= i && i <= n && c == i
+    {
+        c = inc(c)
+        i += 1
+    }
+    c
+}
+
+// A recursive call assumes the `ensures` being proved: if it returns, it
+// returns 0.
+fn down(n: i64) -> i64
+    requires 0 <= n && n <= 100
+    ensures result == 0
+{
+    if n <= 0 { return 0 }
+    down(n - 1)
+}
+
+fn main() {
+    var y = 1
+    bump(&y)
+    println(y + after_bump(3) + unchecked_bump(4) + twice(5) + count(6) + down(7))
+}

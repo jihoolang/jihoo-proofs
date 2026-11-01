@@ -1,0 +1,117 @@
+// The trusted checker: linear integer implications with Farkas certificates.
+// It finds nothing; it only adds up the weighted facts a prover proposes.
+
+// sum(coefs[v] * x_v) + constant, read as a fact `>= 0`. Missing
+// coefficients are zero, so forms over different variables combine.
+pub struct Lin {
+    pub coefs: Vec(i128)
+    pub constant: i128
+}
+
+impl Lin {
+    pub fn num(c: i128) -> Lin {
+        Lin { coefs: Vec(i128).new(), constant: c }
+    }
+
+    pub fn of(v: i64) -> Lin {
+        var coefs = Vec(i128).filled(v + 1, 0)
+        coefs[v] = 1
+        Lin { coefs, constant: 0 }
+    }
+
+    pub fn coef(self, v: i64) -> i128 {
+        if v < self.coefs.len() { self.coefs[v] } else { 0 }
+    }
+
+    pub fn vars(self) -> i64 { self.coefs.len() }
+
+    // self * a + other * b
+    pub fn combine(self, a: i128, other: Lin, b: i128) -> Lin {
+        let n = if self.vars() > other.vars() { self.vars() } else { other.vars() }
+        var coefs = Vec(i128).with_capacity(n)
+        for v in 0..n { coefs.push(self.coef(v) * a + other.coef(v) * b) }
+        Lin { coefs, constant: self.constant * a + other.constant * b }
+    }
+
+    pub fn plus(self, other: Lin) -> Lin { self.combine(1, other, 1) }
+    pub fn minus(self, other: Lin) -> Lin { self.combine(1, other, -1) }
+    pub fn scale(self, k: i128) -> Lin { self.combine(k, Lin.num(0), 0) }
+    pub fn shift(self, k: i128) -> Lin { self.plus(Lin.num(k)) }
+
+    // The largest absolute value among the coefficients and the constant.
+    pub fn magnitude(self) -> i128 {
+        var m = abs(self.constant)
+        for c in self.coefs {
+            if abs(c) > m { m = abs(c) }
+        }
+        m
+    }
+
+    pub fn is_constant(self) -> bool {
+        for c in self.coefs {
+            if c != 0 { return false }
+        }
+        true
+    }
+
+    pub fn clone(self) -> Lin {
+        Lin { coefs: self.coefs.clone(), constant: self.constant }
+    }
+}
+
+// Every fact `>= 0` together implies `claim >= 0`, for all integer values.
+pub struct Goal {
+    pub facts: Vec(Lin)
+    pub claim: Lin
+}
+
+// One non-negative weight per fact, then one for the negated claim
+// `-claim - 1 >= 0`.
+pub struct Certificate {
+    pub weights: Vec(i128)
+}
+
+fn abs(x: i128) -> i128 { if x < 0 { 0 - x } else { x } }
+
+// The checker computes only within these bounds, where no product or sum
+// can leave an i128: each term is at most 2^65 * 2^50 = 2^115, and at most
+// 2^11 of them are added.
+pub const MAX_VALUE: i128 = 1 << 65
+pub const MAX_WEIGHT: i128 = 1 << 50
+pub const MAX_FACTS: i64 = 2047
+
+// Sound because an integer point satisfying the facts and the negated claim
+// makes the weighted sum non-negative, while the sum is a negative constant.
+pub fn check(g: Goal, c: Certificate) -> Result(i64, String) {
+    if c.weights.len() != g.facts.len() + 1 {
+        return Err("a certificate needs one weight per fact and one for the claim")
+    }
+    if g.facts.len() > MAX_FACTS { return Err("too many facts to check") }
+    for x in g.facts {
+        if x.magnitude() > MAX_VALUE { return Err("a fact's numbers are too large to check") }
+    }
+    if g.claim.magnitude() > MAX_VALUE - 1 { return Err(
+        "the claim's numbers are too large to check"
+    ) }
+    for w in c.weights {
+        if w < 0 { return Err("negative weight") }
+        if w > MAX_WEIGHT { return Err("a weight is too large to check") }
+    }
+    var sum = g.claim.scale(-1).shift(-1).scale(c.weights[g.facts.len()])
+    for i in 0..g.facts.len() {
+        if c.weights[i] != 0 { sum = sum.plus(g.facts[i].scale(c.weights[i])) }
+    }
+    if !sum.is_constant() { return Err("the weighted facts do not cancel") }
+    if sum.constant >= 0 { return Err("the weighted facts are not contradictory") }
+    var used = 0
+    for w in c.weights {
+        if w > 0 { used += 1 }
+    }
+    Ok(used)
+}
+
+pub fn certificate(weights: [i128]) -> Certificate {
+    var ws = Vec(i128).new()
+    for w in weights { ws.push(w) }
+    Certificate { weights: ws }
+}

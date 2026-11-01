@@ -1,0 +1,156 @@
+// Negative cases: what the checker, the prover and the generator must reject.
+import fm
+import infer
+import linear
+import models
+import vc
+import verify
+
+// x >= 0 and y - x - 1 >= 0, so y >= 1.
+fn goal() -> linear.Goal {
+    var facts = Vec(linear.Lin).new()
+    facts.push(linear.Lin.of(0))
+    facts.push(linear.Lin.of(1).minus(linear.Lin.of(0)).shift(-1))
+    linear.Goal { facts, claim: linear.Lin.of(1).shift(-1) }
+}
+
+fn k(c: i128) -> vc.Operand { vc.Operand.Const(c) }
+fn l(i: i64) -> vc.Operand { vc.Operand.Local(i) }
+
+fn unproved(r: verify.Report, what: str) -> i64 {
+    var n = 0
+    for x in r.results {
+        match x.verdict {
+            Unproved(_) => if x.what == what { n += 1 }
+            Proved(_) => {}
+        }
+    }
+    n
+}
+
+#[test]
+fn checker_accepts_a_proof() {
+    assert(linear.check(goal(), linear.certificate([1, 1, 1])).is_ok(), "rejected")
+}
+
+#[test]
+fn checker_rejects_changed_weights() {
+    assert(linear.check(goal(), linear.certificate([2, 1, 1])).is_err(), "no cancellation")
+    assert(linear.check(goal(), linear.certificate([0, 0, 0])).is_err(), "no contradiction")
+    assert(linear.check(goal(), linear.certificate([1, 1])).is_err(), "missing weight")
+}
+
+#[test]
+fn checker_rejects_negative_weights() {
+    // -1 * (x >= 0) + 1 * (-x - 1 >= 0 ... ) must not count.
+    var facts = Vec(linear.Lin).new()
+    facts.push(linear.Lin.of(0))
+    let g = linear.Goal { facts, claim: linear.Lin.of(0).scale(-1) }
+    // x >= 0 does not imply -x >= 0; weights (-1, 1) would sum to -1.
+    assert(linear.check(g, linear.certificate([-1, 1])).is_err(), "negative weight")
+}
+
+#[test]
+fn prover_finds_the_certificate() {
+    let g = goal()
+    match fm.prove(g) {
+        Ok(c) => assert(linear.check(g, c).is_ok(), "checker rejected the prover")
+        Err(e) => panic(e.as_str())
+    }
+}
+
+#[test]
+fn prover_fails_on_a_false_claim() {
+    // x >= 0 does not imply x >= 1.
+    var facts = Vec(linear.Lin).new()
+    facts.push(linear.Lin.of(0))
+    assert(fm.prove(linear.Goal { facts, claim: linear.Lin.of(0).shift(-1) }).is_err(), "proved")
+}
+
+#[test]
+fn clamp_without_requires_is_not_proved() {
+    var f = models.clamp()
+    f.requires = Vec(vc.Fact).new()
+    let r = verify.verify(f)
+    // With lo > hi, `return hi` at bb8 breaks lo <= result.
+    assert(!r.complete(), "proved")
+    assert(unproved(r, "bb8: ensures") == 1, "bb8")
+}
+
+#[test]
+fn an_invariant_must_hold_on_entry() {
+    var inv = Vec(vc.Fact).new()
+    inv.push(vc.fact(vc.Cmp.Le, k(1), l(3)))
+    let r = verify.verify(models.sum_with(inv))
+    assert(unproved(r, "bb1: invariant of bb1") == 1, "i >= 1 at entry")
+}
+
+#[test]
+fn an_invariant_must_be_preserved() {
+    // i < xs.len is true inside the loop but not after `i += 1`.
+    var inv = Vec(vc.Fact).new()
+    inv.push(vc.fact(vc.Cmp.Le, k(0), l(3)))
+    inv.push(vc.fact(vc.Cmp.Le, l(3), k(10)))
+    let r = verify.verify(models.sum_with(inv))
+    assert(unproved(r, "bb1: invariant of bb1") == 1, "i <= 10 after i += 1")
+}
+
+#[test]
+fn an_off_by_one_loop_fails_its_bounds_check() {
+    var f = models.sum()
+    // while i <= xs.len
+    f.blocks[1].stmts[0] = vc.Stmt.Assign(
+        4,
+        vc.Rvalue.Compare(vc.Cmp.Le, l(3), l(14)),
+        vc.nowhere()
+    )
+    let r = verify.verify(f)
+    assert(unproved(r, "bb4: index out of bounds") == 1, "i < xs.len")
+}
+
+#[test]
+fn a_loop_needs_an_invariant() {
+    var f = models.sum()
+    f.invariants = Vec((i64, Vec(vc.Fact))).new()
+    let r = verify.verify(f)
+    assert(r.errors.len() > 0, "no error")
+}
+
+#[test]
+fn checker_refuses_numbers_beyond_its_bounds() {
+    // Correct certificates, but the checker would have to leave its bounds.
+    var big = Vec(linear.Lin).new()
+    big.push(linear.Lin.of(0).scale(1 << 66))
+    let g = linear.Goal { facts: big, claim: linear.Lin.of(0) }
+    assert(linear.check(g, linear.certificate([1, 1 << 66])).is_err(), "large fact")
+    assert(
+        linear.check(goal(), linear.certificate([1 << 51, 1 << 51, 1 << 51])).is_err(),
+        "large weight"
+    )
+}
+
+#[test]
+fn invariants_are_inferred_for_a_loop() {
+    // sum's loop with no invariant: inference finds 0 <= i <= xs.len.
+    var f = models.sum_with(Vec(vc.Fact).new())
+    f.invariants = Vec((i64, Vec(vc.Fact))).new()
+    let r = verify.verify(infer.infer(f))
+    assert(r.errors.len() == 0, "the loop is followed")
+    assert(unproved(r, "bb4: index out of bounds") == 0, "bounds check")
+    assert(r.proved() == r.results.len() - 2, "all but s + xs[i]")
+}
+
+#[test]
+fn inferred_invariants_are_checked() {
+    // The off-by-one loop: no candidate can prove i < xs.len, and the
+    // bounds check stays unproved.
+    var f = models.sum_with(Vec(vc.Fact).new())
+    f.invariants = Vec((i64, Vec(vc.Fact))).new()
+    f.blocks[1].stmts[0] = vc.Stmt.Assign(
+        4,
+        vc.Rvalue.Compare(vc.Cmp.Le, l(3), l(14)),
+        vc.nowhere()
+    )
+    let r = verify.verify(infer.infer(f))
+    assert(unproved(r, "bb4: index out of bounds") == 1, "i < xs.len")
+}

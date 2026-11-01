@@ -1,0 +1,189 @@
+// Untrusted loop invariant inference (Houdini): propose simple facts at
+// every loop head that has no invariant, then drop each one that is not
+// proved on entry or after an iteration, until the rest are. Whatever it
+// returns is checked again by `verify`, so its bugs lose proofs only.
+import fm
+import linear
+import vc
+
+fn successors(t: vc.Term) -> Vec(i64) {
+    var out = Vec(i64).new()
+    match t {
+        Goto(b) => out.push(b)
+        Switch(_, a, b) => {
+            out.push(a)
+            out.push(b)
+        }
+        Assert(_, _, b, _) => out.push(b)
+        Any(bs) => {
+            for b in bs { out.push(b) }
+        }
+        Call(_, b, _) => out.push(b)
+        _ => {}
+    }
+    out
+}
+
+// The targets of back edges in a depth-first walk from the entry.
+pub fn loop_heads(f: vc.Function) -> Vec(i64) {
+    let n = f.blocks.len()
+    // 0: not reached, 1: on the walk's stack, 2: done.
+    var color = Vec(i64).filled(n, 0)
+    var head = Vec(bool).filled(n, false)
+    var stack = Vec((i64, i64)).new()
+    if n == 0 { return Vec(i64).new() }
+    color[0] = 1
+    stack.push((0, 0))
+    loop {
+        let Some(top) = stack.pop() else { break }
+        let succ = successors(f.blocks[top.0].term)
+        if top.1 < succ.len() {
+            stack.push((top.0, top.1 + 1))
+            let s = succ[top.1]
+            if color[s] == 1 {
+                head[s] = true
+            } else if color[s] == 0 {
+                color[s] = 1
+                stack.push((s, 0))
+            }
+        } else { color[top.0] = 2 }
+    }
+    var out = Vec(i64).new()
+    for b in 0..n {
+        if head[b] { out.push(b) }
+    }
+    out
+}
+
+fn assigned_in(f: vc.Function) -> Vec(i64) {
+    // The number of blocks that assign each local.
+    var count = Vec(i64).filled(f.locals.len(), 0)
+    for b in f.blocks {
+        var here = Vec(bool).filled(f.locals.len(), false)
+        for s in b.stmts {
+            match s {
+                Assign(dst, _, _) => here[dst] = true
+            }
+        }
+        match b.term {
+            Call(dst, _, site) => {
+                if dst >= 0 { here[dst] = true }
+                for a in site.args {
+                    match a {
+                        Lent(x) => here[x] = true
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        for l in 0..f.locals.len() {
+            if here[l] { count[l] += 1 }
+        }
+    }
+    count
+}
+
+fn is_int(f: vc.Function, l: i64) -> bool {
+    match f.locals[l].kind {
+        Int(_, _) => true
+        Other => false
+    }
+}
+
+// Variables a loop counts with (assigned in two blocks or more: before the
+// loop and in it), and what they are compared with (never assigned:
+// arguments and lengths).
+fn candidates(f: vc.Function) -> Vec(vc.Fact) {
+    let count = assigned_in(f)
+    var moving = Vec(i64).new()
+    var fixed = Vec(i64).new()
+    for l in 1..f.locals.len() {
+        if is_int(f, l) {
+            if count[l] >= 2 { moving.push(l) }
+            if count[l] == 0 { fixed.push(l) }
+        }
+    }
+    var out = Vec(vc.Fact).new()
+    for v in moving {
+        match f.locals[v].kind {
+            Int(lo, _) => if lo < 0 {
+                out.push(vc.fact(vc.Cmp.Le, vc.Operand.Const(0), vc.Operand.Local(v)))
+            }
+            Other => {}
+        }
+        for w in moving {
+            if w != v { out.push(vc.fact(vc.Cmp.Le, vc.Operand.Local(v), vc.Operand.Local(w))) }
+        }
+        for w in fixed {
+            out.push(vc.fact(vc.Cmp.Le, vc.Operand.Local(v), vc.Operand.Local(w)))
+            out.push(vc.fact(vc.Cmp.Le, vc.Operand.Local(w), vc.Operand.Local(v)))
+        }
+    }
+    out
+}
+
+fn copy_facts(xs: [vc.Fact]) -> Vec(vc.Fact) {
+    var out = Vec(vc.Fact).new()
+    for x in xs { out.push(x.clone()) }
+    out
+}
+
+pub const MAX_ROUNDS: i64 = 20
+
+// `f` with invariants proposed for its loop heads that have none.
+pub fn infer(sink f: vc.Function) -> vc.Function {
+    let none = Vec(vc.Function).new()
+    infer_with(f, none.as_slice())
+}
+
+// The same, with the contracts of the functions in `all` at calls to them.
+pub fn infer_with(sink f: vc.Function, all: [vc.Function]) -> vc.Function {
+    let proposed = candidates(f)
+    let heads = loop_heads(f)
+    var g = f
+    if proposed.len() == 0 { return g }
+    // Which invariants this adds, as indices into `g.invariants`.
+    var ours = Vec(bool).new()
+    for _ in 0..g.invariants.len() { ours.push(false) }
+    for h in heads {
+        var has = false
+        for inv in g.invariants {
+            if inv.0 == h { has = true }
+        }
+        if !has {
+            g.invariants.push((h, copy_facts(proposed.as_slice())))
+            ours.push(true)
+        }
+    }
+    for _ in 0..MAX_ROUNDS {
+        let obs = vc.generate_with(g, all)
+        var failed = Vec(Vec(bool)).new()
+        for inv in g.invariants { failed.push(Vec(bool).filled(inv.1.len(), false)) }
+        var any = false
+        for o in obs.list {
+            let (i, j) = o.source
+            if i >= 0 && ours[i] && !failed[i][j] {
+                let ok = match fm.prove(o.goal) {
+                    Ok(c) => linear.check(o.goal, c).is_ok()
+                    Err(_) => false
+                }
+                if !ok {
+                    failed[i][j] = true
+                    any = true
+                }
+            }
+        }
+        if !any { break }
+        for i in 0..g.invariants.len() {
+            if ours[i] {
+                var kept = Vec(vc.Fact).new()
+                for j, x in g.invariants[i].1 {
+                    if !failed[i][j] { kept.push(x.clone()) }
+                }
+                g.invariants[i].1 = kept
+            }
+        }
+    }
+    g
+}

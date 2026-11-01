@@ -1,0 +1,45 @@
+// Verifies functions from `emit-obligations` output, with the contracts
+// their source states: `emitted [--machine] [--infer] <obligations> [names...]`.
+// Without names, every function of the program's own module (`main.`).
+// A call to any function in the output proves its `requires` and assumes
+// its `ensures`; `--infer` proposes invariants for the loops that have none.
+import std.env
+import std.fs
+import infer
+import load
+import verify
+
+fn read(path: str) -> String {
+    match fs.read_file(path) {
+        Ok(s) => s
+        Err(e) => panic(("cannot read " + path + ": " + e.to_string().as_str()).as_str())
+    }
+}
+
+fn main() {
+    var args = env.args()
+    let machine = args.len() > 1 && args[1] == "--machine"
+    if machine { args.remove(1) }
+    let guess = args.len() > 1 && args[1] == "--infer"
+    if guess { args.remove(1) }
+    if args.len() < 2 { panic("usage: emitted [--machine] [--infer] <obligations> [names...]") }
+    let text = read(args[1])
+    // Read twice: the functions to verify are taken apart, and every
+    // function's contract is kept for the calls.
+    let all = match load.functions(text.as_str()) {
+        Ok(fs) => fs
+        Err(e) => panic(e.as_str())
+    }
+    let mine = load.functions(text.as_str()).unwrap()
+    for f in mine.into_iter() {
+        var wanted = args.len() == 2 && f.symbol.as_str().starts_with("main.")
+        for i in 2..args.len() {
+            if f.name == args[i] { wanted = true }
+        }
+        if wanted {
+            let g = if guess { infer.infer_with(f, all.as_slice()) } else { f }
+            let r = verify.verify_with(g, all.as_slice())
+            print(if machine { r.machine() } else { r.text() })
+        }
+    }
+}

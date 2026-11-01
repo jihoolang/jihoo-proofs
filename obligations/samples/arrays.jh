@@ -1,0 +1,29 @@
+// Fixed arrays, whose bounds checks compare with a constant length, and a
+// struct field read in arithmetic.
+
+// In bounds: the branch keeps 0 <= i < 4.
+fn pick(i: i64) -> i64 {
+    let a = [10, 20, 30, 40]
+    if i >= 0 && i < 4 { a[i] } else { 0 }
+}
+
+// Off by one: i == 4 is out of bounds.
+fn pick_wrong(i: i64) -> i64 {
+    let a = [10, 20, 30, 40]
+    if i >= 0 && i <= 4 { a[i] } else { 0 }
+}
+
+struct Counter {
+    n: u8
+}
+
+// The field is opaque, but its type bounds it: a u8 plus 1 fits a u8 only
+// below 255, so this stays unproved and fails at 255.
+fn next(c: u8) -> u8 {
+    let k = Counter { n: c }
+    k.n + 1
+}
+
+fn main() {
+    println(pick(1) + pick_wrong(2) + next(3) as i64)
+}
