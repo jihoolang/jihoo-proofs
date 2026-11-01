@@ -30,7 +30,7 @@ SAMPLES = {
 # Changes that make the model wrong; the differential test must notice.
 MUTATIONS = [
     ("bugs", "(set 4 (cmp le (local 3) (local 13)))", "(set 4 (cmp lt (local 3) (local 13)))"),
-    ("bugs", "(set 5 (use opaque))", "(set 5 (use (local 1)))"),
+    ("bugs", "(set 5 (use (opaque escaped)))", "(set 5 (use (local 1)))"),
 ]
 
 
@@ -92,7 +92,7 @@ def main():
     # The generator against the interpreter: no proved check may fail.
     differential = {}
     if samples:
-        for name in ["abs", "bugs", "ints"]:
+        for name in ["abs", "bugs", "ints", "arrays"]:
             for mode in [[], ["--release"]]:
                 key = name + (" --release" if mode else "")
                 result = out / f"differential-{name}{'-release' if mode else ''}.json"

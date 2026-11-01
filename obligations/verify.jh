@@ -12,6 +12,8 @@ pub enum Verdict {
 
 pub struct Result1 {
     pub what: String
+    // Where the claim's variables come from (`vc.why_code`s).
+    pub depends: Vec(i64)
     // The check's span, `vc.nowhere()` for invariants and `ensures`.
     pub at: (i64, i64)
     pub verdict: Verdict
@@ -35,6 +37,16 @@ impl Report {
         n
     }
 
+    // What stopped the generator, in a word.
+    fn error_kind(self) -> str {
+        let e = self.errors[0].as_str()
+        if e.contains("loop without an invariant") { return "loop" }
+        if e.contains(" paths") { return "paths" }
+        if e.contains(" is reached") { return "unreachable" }
+        if e.contains("not linear") { return "ne" }
+        "fact"
+    }
+
     pub fn complete(self) -> bool {
         self.errors.len() == 0 && self.proved() == self.results.len()
     }
@@ -56,7 +68,19 @@ impl Report {
             let verdict = if proved && whole { "proved" } else { "unproved" }
             if r.at.0 >= 0 {
                 out += "check " + self.function.as_str() + " " + r.at.0.to_string() + " " +
-                    r.at.1.to_string() + " " + verdict + "\n"
+                    r.at.1.to_string() + " " + verdict
+                // Why: the function was not followed everywhere, or where the
+                // claim's values come from.
+                if !whole {
+                    out += " incomplete:" + self.error_kind()
+                } else if !proved {
+                    out += " "
+                    for i, d in r.depends {
+                        if i > 0 { out += "," }
+                        out += vc.why_name(d)
+                    }
+                }
+                out += "\n"
             }
             if r.what.as_str().ends_with(": ensures") && !proved { ensures = false }
         }
@@ -95,7 +119,12 @@ pub fn verify(f: vc.Function) -> Report {
             }
             Err(e) => Verdict.Unproved(e.to_string())
         }
-        results.push(Result1 { what: o.what.clone(), at: o.at, verdict })
+        results.push(Result1 {
+            what: o.what.clone(),
+            depends: o.depends.clone(),
+            at: o.at,
+            verdict
+        })
     }
     Report { function: f.name.clone(), results, errors: obs.errors.clone() }
 }

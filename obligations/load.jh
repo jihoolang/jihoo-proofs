@@ -49,6 +49,19 @@ fn at(x: sexp.Sexp) -> Result((i64, i64), String) {
     Ok((index(ps[0])?, index(ps[1])?))
 }
 
+// The reason of `(opaque why)`; a bare `opaque` has none.
+fn why(x: sexp.Sexp) -> i64 {
+    match x {
+        List(xs) => if xs.len() == 2 {
+            match xs[1].atom() {
+                Ok(w) => vc.why_code(w)
+                Err(_) => vc.WHY_OTHER
+            }
+        } else { vc.WHY_OTHER }
+        Atom(_) => vc.WHY_OTHER
+    }
+}
+
 fn tag(x: sexp.Sexp) -> Result(str, String) {
     match x {
         Atom(a) => Ok(a.as_str())
@@ -58,11 +71,13 @@ fn tag(x: sexp.Sexp) -> Result(str, String) {
 
 fn operand(x: sexp.Sexp) -> Result(vc.Operand, String) {
     match tag(x)? {
-        "opaque" => Ok(vc.Operand.Opaque)
+        "opaque" => Ok(vc.Operand.Opaque(why(x)))
         "local" => Ok(vc.Operand.Local(index(head(x, "local", 1)?[0])?))
         "const" => match int(head(x, "const", 1)?[0]) {
-            Ok(c) => if small(c) { Ok(vc.Operand.Const(c)) } else { Ok(vc.Operand.Opaque) }
-            Err(_) => Ok(vc.Operand.Opaque)
+            Ok(c) => if small(c) { Ok(vc.Operand.Const(c)) } else { Ok(vc.Operand.Opaque(vc.why_code(
+                "constant"
+            ))) }
+            Err(_) => Ok(vc.Operand.Opaque(vc.why_code("constant")))
         }
         t => Err("unknown operand `" + t + "`")
     }
@@ -82,7 +97,7 @@ fn cmp(name: str) -> Result(vc.Cmp, String) {
 
 fn rvalue(x: sexp.Sexp) -> Result(vc.Rvalue, String) {
     let t = tag(x)?
-    if t == "opaque" { return Ok(vc.Rvalue.Opaque) }
+    if t == "opaque" { return Ok(vc.Rvalue.Opaque(why(x))) }
     let xs = x.list()?
     match t {
         "use" => Ok(vc.Rvalue.Use(operand(head(x, "use", 1)?[0])?))

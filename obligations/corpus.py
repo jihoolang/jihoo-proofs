@@ -45,6 +45,9 @@ def main():
         totals = {"files": 0, "skipped": 0, "functions": 0, "checks": 0, "proved": 0,
                   "probes": 0, "unproved check failed": 0, "unmodelled failure": 0, "bug": 0}
         skipped, load_errors, bugs, model_errors = [], [], [], {}
+        # Why each unproved check is: the function was not followed
+        # (`incomplete:...`), or where its claim's values come from.
+        reasons = {}
         for f in files:
             name = str(f.relative_to(args.checkout))
             emitted = run(jihoo, "emit-obligations", f)
@@ -62,12 +65,18 @@ def main():
                 continue
             totals["files"] += 1
             totals["functions"] += len(own)
-            checks = {}
+            checks, why = {}, {}
             for line in verified.stdout.splitlines():
                 parts = line.split()
                 if parts[0] == "check":
                     key = (parts[1], parts[2], parts[3])
                     checks[key] = checks.get(key, True) and parts[4] == "proved"
+                    if parts[4] != "proved" and len(parts) > 5:
+                        why.setdefault(key, set()).update(parts[5].split(","))
+            for key, ws in why.items():
+                if not checks[key]:
+                    label = "+".join(sorted(ws))
+                    reasons[label] = reasons.get(label, 0) + 1
             totals["checks"] += len(checks)
             totals["proved"] += sum(checks.values())
 
@@ -90,9 +99,11 @@ def main():
                   f"{r['probes']} probes" + (" BUG" if d.returncode == 3 else ""), flush=True)
 
     summary = {"totals": totals, "load_errors": load_errors, "bugs": bugs, "skipped": skipped,
-               "unmodelled_failures": model_errors}
+               "unmodelled_failures": model_errors,
+               "unproved_because": dict(sorted(reasons.items(), key=lambda kv: -kv[1]))}
     args.report.write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(totals))
+    print("unproved because: " + json.dumps(summary["unproved_because"]))
     for e in load_errors:
         print("LOAD " + e)
     for b in bugs:

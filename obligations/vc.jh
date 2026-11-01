@@ -5,8 +5,56 @@ import linear
 pub enum Operand {
     Local(i64)
     Const(i128)
-    // A value the model does not follow.
-    Opaque
+    // A value the model does not follow, and why (`why_code`).
+    Opaque(i64)
+}
+
+// Where a variable's value comes from, which is why a check that depends on
+// it may not be proved: the first five are the model's own, the others the
+// reasons `emit-obligations` gives for an opaque value.
+pub const WHY_ARGUMENT: i64 = 0
+pub const WHY_LOOP: i64 = 1
+pub const WHY_CALL: i64 = 2
+pub const WHY_CAST: i64 = 3
+pub const WHY_UNSTATED: i64 = 4
+pub const WHY_OTHER: i64 = 5
+
+const WHY_COUNT: i64 = 23
+
+pub fn why_name(w: i64) -> str {
+    match w {
+        0 => "argument"
+        1 => "loop"
+        2 => "call"
+        3 => "cast"
+        4 => "unstated"
+        5 => "other"
+        6 => "load"
+        7 => "field"
+        8 => "variant"
+        9 => "element"
+        10 => "escaped"
+        11 => "aggregate"
+        12 => "constant"
+        13 => "wrap"
+        14 => "bits"
+        15 => "bool"
+        16 => "div"
+        17 => "rem"
+        18 => "shift"
+        19 => "neg"
+        20 => "pointer"
+        21 => "tag"
+        22 => "length"
+        _ => "other"
+    }
+}
+
+pub fn why_code(name: str) -> i64 {
+    for i in 0..WHY_COUNT {
+        if why_name(i) == name { return i }
+    }
+    WHY_OTHER
 }
 
 pub enum Cmp {
@@ -36,8 +84,8 @@ pub enum Rvalue {
     // `0 <= a && a < b` because a length is never negative.
     InBounds(Operand, Operand)
     // A value the model does not follow (a load, a call's result): only its
-    // type's range is known.
-    Opaque
+    // type's range is known. The reason is a `why_code`.
+    Opaque(i64)
 }
 
 // A check's source span as byte offsets, `(-1, -1)` when there is none: where
@@ -111,6 +159,8 @@ pub struct Obligation {
     // For an invariant: its index in `invariants` and the fact's in it;
     // `nowhere()` otherwise.
     pub source: (i64, i64)
+    // Where the claim's variables come from (`why_code`s), for reports.
+    pub depends: Vec(i64)
     pub goal: linear.Goal
 }
 
@@ -137,6 +187,8 @@ struct Path {
     facts: Vec(linear.Lin)
     // The range of each variable: the locals, then the fresh ones.
     ranges: Vec(Kind)
+    // Where each variable's value comes from (`why_code`).
+    origins: Vec(i64)
     steps: i64
     // The blocks this path has run: reaching one again without passing a
     // loop head with an invariant is a loop the model cannot follow.
@@ -173,7 +225,7 @@ fn operand(p: Path, o: Operand) -> Option(linear.Lin) {
             Num(x) => Some(x.clone())
             _ => None
         }
-        Opaque => None
+        Opaque(_) => None
     }
 }
 
@@ -237,11 +289,24 @@ impl Gen {
             }
             if named { range_facts(p.ranges[v], linear.Lin.of(v), &facts) }
         }
+        var depends = Vec(i64).new()
+        if claim.is_constant() { depends.push(WHY_UNSTATED) }
+        for v in 0..claim.vars() {
+            if claim.coef(v) != 0 {
+                let w = p.origins[v]
+                var have = false
+                for d in depends {
+                    if d == w { have = true }
+                }
+                if !have { depends.push(w) }
+            }
+        }
         self.out.push(Obligation {
             function: f.name.clone()
             what: "bb" + p.block.to_string() + ": " + what
             at: self.at
             source: self.source
+            depends
             goal: linear.Goal { facts, claim }
         })
     }
@@ -293,11 +358,13 @@ fn start(f: Function, block: i64, facts: [Fact]) -> Path {
         state: Vec(Sym).new(),
         facts: Vec(linear.Lin).new(),
         ranges: Vec(Kind).new(),
+        origins: Vec(i64).new(),
         steps: 0,
         seen: Vec(bool).filled(f.blocks.len(), false)
     }
     for v in 0..f.locals.len() {
         p.ranges.push(f.locals[v].kind)
+        p.origins.push(if block == 0 { WHY_ARGUMENT } else { WHY_LOOP })
         match f.locals[v].kind {
             Int(_, _) => p.state.push(Sym.Num(linear.Lin.of(v)))
             Other => p.state.push(Sym.Unknown)
@@ -318,7 +385,8 @@ fn clone_path(p: Path, block: i64) -> Path {
     var ranges = Vec(Kind).new()
     for k in p.ranges { ranges.push(k) }
     Path {
-        block, state, facts: clone_lins(p.facts.as_slice()), ranges, steps: p.steps + 1,
+        block, state, facts: clone_lins(p.facts.as_slice()), ranges, origins: p.origins.clone(),
+        steps: p.steps + 1,
         seen: p.seen.clone()
     }
 }
@@ -373,7 +441,7 @@ fn kind_of(f: Function, o: Operand) -> Option((i128, i128)) {
             Other => None
         }
         Const(c) => Some((c, c))
-        Opaque => None
+        Opaque(_) => None
     }
 }
 
@@ -399,13 +467,17 @@ fn compare(p: Path, op: Cmp, a: Operand, b: Operand) -> Sym {
     // `x` becomes at least 2^63, more than any such `y`. `y` is a `u64` in
     // that range, or an `i64` that is not negative, cast too.
     let i64_max: i128 = (1 << 63) - 1
+    // A fixed array's bounds check compares with a constant length.
     let Local(i) = a else { return Sym.Unknown }
-    let Local(j) = b else { return Sym.Unknown }
     let Wrapped(x) = p.state[i] else { return Sym.Unknown }
-    let y = match p.state[j] {
-        Wrapped(y) => y.clone()
-        Num(y) => y.clone()
-        _ => return Sym.Unknown
+    let y = match b {
+        Const(c) => linear.Lin.num(c)
+        Local(j) => match p.state[j] {
+            Wrapped(y) => y.clone()
+            Num(y) => y.clone()
+            _ => return Sym.Unknown
+        }
+        Opaque(_) => return Sym.Unknown
     }
     match op {
         Lt => {}
@@ -454,24 +526,24 @@ fn assign(inout g: Gen, f: Function, inout p: Path, dst: i64, rv: Rvalue) {
         Use(o) => match o {
             Local(l) => clone_sym(p.state[l])
             Const(c) => Sym.Num(linear.Lin.num(c))
-            Opaque => Sym.Unknown
+            Opaque(_) => Sym.Unknown
         }
         Add(a, b) => {
-            let r = match (operand(p, a), operand(p, b)) {
+            let r = match (term(&p, f, a, dst), term(&p, f, b, dst)) {
                 (Some(x), Some(y)) => Some(x.plus(y))
                 _ => None
             }
             arithmetic(&g, f, p, dst, r)
         }
         Sub(a, b) => {
-            let r = match (operand(p, a), operand(p, b)) {
+            let r = match (term(&p, f, a, dst), term(&p, f, b, dst)) {
                 (Some(x), Some(y)) => Some(x.minus(y))
                 _ => None
             }
             arithmetic(&g, f, p, dst, r)
         }
         Mul(a, b) => {
-            let r = match (operand(p, a), operand(p, b)) {
+            let r = match (term(&p, f, a, dst), term(&p, f, b, dst)) {
                 (Some(x), Some(y)) => if y.is_constant() {
                     scaled(x, y.constant)
                 } else if x.is_constant() { scaled(y, x.constant) } else { None }
@@ -504,21 +576,47 @@ fn assign(inout g: Gen, f: Function, inout p: Path, dst: i64, rv: Rvalue) {
             }
             _ => Sym.Unknown
         }
-        Opaque => Sym.Unknown
+        Opaque(_) => Sym.Unknown
     }
-    havoc_or(&p, f, dst, value)
+    // Why the value is unknown, if it is.
+    let why = match rv {
+        Use(o) => match o {
+            Opaque(w) => w
+            _ => WHY_OTHER
+        }
+        Opaque(w) => w
+        Cast(_) => WHY_CAST
+        _ => WHY_UNSTATED
+    }
+    havoc_or(&p, f, dst, value, why)
+}
+
+// A new variable with a range, from a value the model does not follow.
+fn fresh(inout p: Path, kind: Kind, why: i64) -> linear.Lin {
+    let x = linear.Lin.of(p.ranges.len())
+    p.ranges.push(kind)
+    p.origins.push(why)
+    x
+}
+
+// An operand of `+ - *`. MIR gives both operands the result's type, so an
+// opaque one is a new variable in the destination's range.
+fn term(inout p: Path, f: Function, o: Operand, dst: i64) -> Option(linear.Lin) {
+    match o {
+        Opaque(w) => match f.locals[dst].kind {
+            Int(_, _) => Some(fresh(&p, f.locals[dst].kind, w))
+            Other => None
+        }
+        _ => operand(p, o)
+    }
 }
 
 // Gives the local the value, or a fresh variable in its range when the
 // value is unknown.
-fn havoc_or(inout p: Path, f: Function, dst: i64, sink value: Sym) {
+fn havoc_or(inout p: Path, f: Function, dst: i64, sink value: Sym, why: i64) {
     match value {
         Unknown => match f.locals[dst].kind {
-            Int(_, _) => {
-                let x = linear.Lin.of(p.ranges.len())
-                p.ranges.push(f.locals[dst].kind)
-                p.state[dst] = Sym.Num(x)
-            }
+            Int(_, _) => p.state[dst] = Sym.Num(fresh(&p, f.locals[dst].kind, why))
             Other => p.state[dst] = Sym.Unknown
         }
         _ => p.state[dst] = value
@@ -616,14 +714,15 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
             }
             Call(dst, next) => {
                 var q = clone_path(p, next)
-                if dst >= 0 { havoc_or(&q, f, dst, Sym.Unknown) }
+                if dst >= 0 { havoc_or(&q, f, dst, Sym.Unknown, WHY_CALL) }
                 work.push(q)
             }
             Trap => {}
             Return => holds(&g, f, p, "ensures", f.ensures.as_slice(), -1)
-            Unreachable => g.errors.push(
-                f.name.as_str() + ": bb" + p.block.to_string() + " is reached"
-            )
+            // MIR's `unreachable` is a promise the compiler makes (after a
+            // call that does not return, an impossible `match` arm), and LLVM
+            // relies on it too: a path that reaches it is not taken.
+            Unreachable => {}
         }
     }
 }

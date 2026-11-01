@@ -98,6 +98,12 @@ off-by-one loop condition and a loop without an invariant are all rejected.
   when `b` is a length, fresh variables for loads). A wrong rule there proves
   false things, which the checker cannot see.
 
+- **MIR's `unreachable` is trusted.** A path that reaches it ends there,
+  as LLVM assumes; reporting the function incomplete instead made 53
+  checks unprovable.
+- **An opaque operand of `+ - *` is a variable.** MIR gives both operands
+  the result's type, so `x.n + 1` with `x.n` opaque still states its
+  overflow check, over a value in the field's range.
 - **A function is followed everywhere or not at all.** A path that comes
   back to a block it ran, without a loop head with an invariant between,
   stops with an error, and at most 2,000 paths are followed per function
@@ -153,11 +159,21 @@ the 98 files of jihoo 0.4.2:
 ```text
                      364 functions, 317 checks, 270 probes, 0 bugs
 without --infer      25 checks proved
-with --infer         66 checks proved
+with --infer         69 checks proved
 ```
 
 Most checks are in loops, and a loop without an invariant proves nothing
-(see below); inference supplies the simple ones. The 37 failures outside the model are
+(see below); inference supplies the simple ones. Every unproved check
+says why (`check NAME LO HI unproved WHY` in `--machine` output): where
+the values its claim depends on come from, `argument`, `loop` (only the
+invariant is known at a loop head), `call`, or the reason
+`emit-obligations` gave for an opaque value, such as `load` or `field`;
+or `incomplete:paths` when the function was not followed everywhere.
+`corpus.py` tallies them (`unproved_because` in its report). With
+inference, the largest groups are `load` (about 80, alone or with
+others), `loop` (about 70), `call` (about 35), checks the model cannot
+state (30) and `argument` (13): contracts on calls and on memory, not
+more arithmetic, are what would prove more. The 37 failures outside the model are
 the interpreter's limits (printing, statics, intrinsics, call depth), not
 checks the model missed. The first runs found three bugs in the tools, none
 in what they proved: `emit-obligations` overflowed computing `i128`'s range;
