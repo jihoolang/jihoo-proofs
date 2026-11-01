@@ -1,0 +1,5 @@
+(contract widen
+  (ensures (le (local 0) (const 510))))
+(contract bounded
+  (requires (le (const -1000) (local 1)) (le (local 1) (const 1000)))
+  (ensures (le (const -1999) (local 0)) (le (local 0) (const 2001))))

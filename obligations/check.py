@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,11 @@ SAMPLES = {
         "scale: 3 of 3 obligations proved",
     ],
 }
+# Changes that make the model wrong; the differential test must notice.
+MUTATIONS = [
+    ("bugs", "(set 4 (cmp le (local 3) (local 13)))", "(set 4 (cmp lt (local 3) (local 13)))"),
+    ("bugs", "(set 5 (use opaque))", "(set 5 (use (local 1)))"),
+]
 
 
 def run(*args):
@@ -82,10 +88,31 @@ def main():
     elif "unknown command" not in probe.stderr:
         raise SystemExit(probe.stderr)
 
+    # The generator against the interpreter: no proved check may fail.
+    differential = {}
+    if samples:
+        for name in ["abs", "bugs", "ints"]:
+            for mode in [[], ["--release"]]:
+                key = name + (" --release" if mode else "")
+                result = out / f"differential-{name}{'-release' if mode else ''}.json"
+                r = run(sys.executable, HERE / "differential.py", "--compiler", jihoo,
+                        HERE / f"samples/{name}.jh", "--count", "20", "--report", result, *mode)
+                if r.returncode:
+                    raise SystemExit(f"differential {key}:\n{r.stdout}{r.stderr}")
+                differential[key] = json.loads(result.read_text())["results"]
+        for name, old, new in MUTATIONS:
+            r = run(sys.executable, HERE / "differential.py", "--compiler", jihoo,
+                    HERE / f"samples/{name}.jh", "--count", "20", "--mutate", old, new)
+            if r.returncode != 1 or "BUG" not in r.stdout:
+                raise SystemExit(f"a wrong model went unnoticed ({old} -> {new}):\n{r.stdout}{r.stderr}")
+            differential[f"mutation {old} -> {new}"] = "noticed"
+
     report = {"negative_tests_passed": passed, "example": status, "evaluations": steps,
-              "emitted_samples": samples or "the compiler has no emit-obligations"}
+              "emitted_samples": samples or "the compiler has no emit-obligations",
+              "differential": differential}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"obligations: {passed} tests; example: {status}; {len(samples)} emitted samples")
+    print(f"obligations: {passed} tests; example: {status}; {len(samples)} emitted samples; "
+          f"{len(differential)} differential runs")
 
 
 if __name__ == "__main__":

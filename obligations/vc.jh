@@ -40,8 +40,12 @@ pub enum Rvalue {
     Opaque
 }
 
+// A check's source span as byte offsets, `(-1, -1)` when there is none: where
+// the compiler's interpreter reports the check failing.
+pub fn nowhere() -> (i64, i64) { (-1, -1) }
+
 pub enum Stmt {
-    Assign(i64, Rvalue)
+    Assign(i64, Rvalue, (i64, i64))
 }
 
 pub enum Term {
@@ -50,7 +54,7 @@ pub enum Term {
     Switch(i64, i64, i64)
     // `assert _b, msg -> next`; a negative local is a condition the model
     // does not follow.
-    Assert(i64, String, i64)
+    Assert(i64, String, i64, (i64, i64))
     // Any of the blocks (a `switch` the model does not follow).
     Any(Vec(i64))
     // A call whose result goes to the local (none if negative), then the block.
@@ -102,6 +106,8 @@ pub fn len_range() -> Kind { Kind.Int(0, (1 << 63) - 1) }
 pub struct Obligation {
     pub function: String
     pub what: String
+    // The check's span; `nowhere()` for invariants and `ensures`.
+    pub at: (i64, i64)
     pub goal: linear.Goal
 }
 
@@ -203,6 +209,8 @@ fn range_facts(k: Kind, x: linear.Lin, inout out: Vec(linear.Lin)) {
 struct Gen {
     out: Vec(Obligation)
     errors: Vec(String)
+    // The span of the check being generated.
+    at: (i64, i64)
 }
 
 impl Gen {
@@ -220,6 +228,7 @@ impl Gen {
         self.out.push(Obligation {
             function: f.name.clone()
             what: "bb" + p.block.to_string() + ": " + what
+            at: self.at
             goal: linear.Goal { facts, claim }
         })
     }
@@ -518,7 +527,11 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
         let b = f.blocks[p.block]
         for s in b.stmts {
             match s {
-                Assign(dst, rv) => assign(&g, f, &p, dst, rv)
+                Assign(dst, rv, at) => {
+                    g.at = at
+                    assign(&g, f, &p, dst, rv)
+                    g.at = nowhere()
+                }
             }
         }
         match b.term {
@@ -549,7 +562,8 @@ fn walk(inout g: Gen, f: Function, sink first: Path) {
                 work.push(no)
                 work.push(yes)
             }
-            Assert(c, msg, next) => {
+            Assert(c, msg, next, at) => {
+                g.at = at
                 var q = clone_path(p, next)
                 let cond = if c >= 0 { clone_sym(p.state[c]) } else { Sym.Unknown }
                 match cond {
@@ -589,12 +603,12 @@ pub struct Obligations {
 // The obligations of a function: from its entry under `requires`, and from
 // each loop head under its invariant.
 pub fn generate(f: Function) -> Obligations {
-    var g = Gen { out: Vec(Obligation).new(), errors: Vec(String).new() }
+    var g = Gen { out: Vec(Obligation).new(), errors: Vec(String).new(), at: nowhere() }
     walk(&g, f, start(f, 0, f.requires.as_slice()))
     for inv in f.invariants {
         walk(&g, f, start(f, inv.0, inv.1.as_slice()))
     }
     match g {
-        Gen { out, errors } => Obligations { list: out, errors }
+        Gen { out, errors, .. } => Obligations { list: out, errors }
     }
 }

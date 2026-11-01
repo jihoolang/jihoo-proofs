@@ -40,6 +40,12 @@ fn head(x: sexp.Sexp, name: str, n: i64) -> Result([sexp.Sexp], String) {
     Ok(xs[1..xs.len])
 }
 
+// `(at lo hi)`: a check's span.
+fn at(x: sexp.Sexp) -> Result((i64, i64), String) {
+    let ps = head(x, "at", 2)?
+    Ok((index(ps[0])?, index(ps[1])?))
+}
+
 fn tag(x: sexp.Sexp) -> Result(str, String) {
     match x {
         Atom(a) => Ok(a.as_str())
@@ -98,12 +104,13 @@ fn term(x: sexp.Sexp) -> Result(vc.Term, String) {
             Ok(vc.Term.Switch(index(ps[0])?, index(ps[1])?, index(ps[2])?))
         }
         "assert" => {
-            let ps = head(x, "assert", 3)?
-            let c = match operand(ps[0])? {
+            if xs.len != 4 && xs.len != 5 { return Err("expected (assert c msg next [at])") }
+            let c = match operand(xs[1])? {
                 Local(l) => l
                 _ => -1
             }
-            Ok(vc.Term.Assert(c, ps[1].atom()?.to_string(), index(ps[2])?))
+            let place = if xs.len == 5 { at(xs[4])? } else { vc.nowhere() }
+            Ok(vc.Term.Assert(c, xs[2].atom()?.to_string(), index(xs[3])?, place))
         }
         "any" => {
             var bs = Vec(i64).new()
@@ -153,8 +160,12 @@ fn function(x: sexp.Sexp) -> Result(vc.Function, String) {
         }
         var stmts = Vec(vc.Stmt).new()
         for k in 2..bs.len - 1 {
-            let ps = head(bs[k], "set", 2)?
-            stmts.push(vc.Stmt.Assign(index(ps[0])?, rvalue(ps[1])?))
+            let ps = bs[k].list()?
+            if (ps.len != 3 && ps.len != 4) || ps[0].atom()? != "set" {
+                return Err("expected (set local value [at])")
+            }
+            let place = if ps.len == 4 { at(ps[3])? } else { vc.nowhere() }
+            stmts.push(vc.Stmt.Assign(index(ps[1])?, rvalue(ps[2])?, place))
         }
         blocks.push(vc.Block { stmts, term: term(bs[bs.len - 1])? })
     }

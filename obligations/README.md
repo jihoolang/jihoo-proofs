@@ -103,10 +103,43 @@ off-by-one loop condition and a loop without an invariant are all rejected.
   value modulo 2^64, and `x as u64 < y` as `0 <= x < y` only when `y` is
   known to lie in `[0, 2^63)`; a slice length is, as a view's invariant.
 
+## Testing the generator against the interpreter
+
+The generator is trusted, so `differential.py` tests it against the
+compiler's interpreter, which executes the same MIR. Every check in
+`emit-obligations` output ends with `(at lo hi)`, the span at which
+compile-time evaluation reports it failing. For each function with integer
+and `[i64]` parameters, the script makes random inputs (often at a
+boundary of the type or of the contract's constants) that meet its
+`requires`, evaluates each as a `const` with `jihoo check`, and classifies
+what fails:
+
+```sh
+python3 obligations/differential.py --compiler jihoo obligations/samples/ints.jh
+python3 obligations/differential.py --compiler jihoo obligations/samples/bugs.jh --release
+```
+
+```text
+ints.jh: 100 probes, 85 passed, 15 unproved check failed
+bugs.jh: 60 probes, 39 passed, 20 unproved check failed, 1 ensures failed
+```
+
+A failing check the generator proved, or a failing `ensures` it proved, is
+a soundness bug: the script prints it and exits with 1. `check.py` runs the
+three samples in debug and `--release` builds, then makes the model wrong
+on purpose with `--mutate` (reading `i <= xs.len` as `i < xs.len`;
+forgetting that `bump(&x)` changes `x`) and requires the bug to be found:
+
+```text
+BUG after_call(10,): compile-time evaluation reached a trap at bytes 2817..2823 (ensures was proved)
+```
+
+Random inputs find a wrong rule only on inputs that reach it: a model that
+believed slices hold at most 1,000 elements would pass, since the probes'
+slices are short.
+
 ## Next
 
-- Test the generator against the interpreter: on random inputs, a proved
-  check must never fail.
 - Loop invariants written in the source, then inferred by an untrusted pass
   that proposes candidates (`0 <= i`, `i <= n`) and keeps those that check.
 - Calls through contracts: `Vec.index` requires `0 <= i < self.len()`.

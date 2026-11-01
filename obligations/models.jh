@@ -5,7 +5,7 @@ import vc
 
 fn l(i: i64) -> vc.Operand { vc.Operand.Local(i) }
 fn k(c: i128) -> vc.Operand { vc.Operand.Const(c) }
-fn set(dst: i64, rv: vc.Rvalue) -> vc.Stmt { vc.Stmt.Assign(dst, rv) }
+fn set(dst: i64, rv: vc.Rvalue) -> vc.Stmt { vc.Stmt.Assign(dst, rv, vc.nowhere()) }
 
 fn block(sink stmts: Vec(vc.Stmt), sink term: vc.Term) -> vc.Block { vc.Block { stmts, term } }
 fn jump(t: i64) -> vc.Block { block(Vec(vc.Stmt).new(), vc.Term.Goto(t)) }
@@ -102,7 +102,7 @@ pub fn sum_with(sink invariant: Vec(vc.Fact)) -> vc.Function {
     var b4 = Vec(vc.Stmt).new()
     b4.push(set(5, vc.Rvalue.Use(l(3))))
     b4.push(set(6, vc.Rvalue.InBounds(l(5), l(14))))
-    blocks.push(block(b4, vc.Term.Assert(6, "index out of bounds", 6)))
+    blocks.push(block(b4, vc.Term.Assert(6, "index out of bounds", 6, vc.nowhere())))
     blocks.push(pending())
     var b6 = Vec(vc.Stmt).new()
     b6.push(set(9, vc.Rvalue.Opaque))

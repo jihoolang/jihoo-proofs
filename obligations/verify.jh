@@ -12,6 +12,8 @@ pub enum Verdict {
 
 pub struct Result1 {
     pub what: String
+    // The check's span, `vc.nowhere()` for invariants and `ensures`.
+    pub at: (i64, i64)
     pub verdict: Verdict
 }
 
@@ -35,6 +37,31 @@ impl Report {
 
     pub fn complete(self) -> bool {
         self.errors.len() == 0 && self.proved() == self.results.len()
+    }
+
+    // One line per check with a span, then the function's `ensures`, for
+    // differential.py: `check NAME LO HI proved|unproved` and
+    // `ensures NAME proved|unproved` (proved when every return meets it).
+    pub fn machine(self) -> String {
+        var out = String.new()
+        var ensures = true
+        for r in self.results {
+            let proved = match r.verdict {
+                Proved(_) => true
+                Unproved(_) => false
+            }
+            let verdict = if proved { "proved" } else { "unproved" }
+            if r.at.0 >= 0 {
+                out += "check " + self.function.as_str() + " " + r.at.0.to_string() + " " +
+                    r.at.1.to_string() + " " + verdict + "\n"
+            }
+            if r.what.as_str().ends_with(": ensures") && !proved { ensures = false }
+        }
+        if self.errors.len() > 0 { ensures = false }
+        out += "ensures " + self.function.as_str() + " " + (
+            if ensures { "proved" } else { "unproved" }
+        ) + "\n"
+        out
     }
 
     pub fn text(self) -> String {
@@ -62,7 +89,7 @@ pub fn verify(f: vc.Function) -> Report {
             }
             Err(e) => Verdict.Unproved(e.to_string())
         }
-        results.push(Result1 { what: o.what.clone(), verdict })
+        results.push(Result1 { what: o.what.clone(), at: o.at, verdict })
     }
     Report { function: f.name.clone(), results, errors: obs.errors.clone() }
 }

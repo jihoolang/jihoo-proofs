@@ -98,7 +98,11 @@ fn an_invariant_must_be_preserved() {
 fn an_off_by_one_loop_fails_its_bounds_check() {
     var f = models.sum()
     // while i <= xs.len
-    f.blocks[1].stmts[0] = vc.Stmt.Assign(4, vc.Rvalue.Compare(vc.Cmp.Le, l(3), l(14)))
+    f.blocks[1].stmts[0] = vc.Stmt.Assign(
+        4,
+        vc.Rvalue.Compare(vc.Cmp.Le, l(3), l(14)),
+        vc.nowhere()
+    )
     let r = verify.verify(f)
     assert(unproved(r, "bb4: index out of bounds") == 1, "i < xs.len")
 }
