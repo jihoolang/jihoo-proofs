@@ -1,0 +1,27 @@
+// Every obligation is generated, proved and checked while compiling; the
+// program only prints the reports. Each function is its own compile-time
+// evaluation, with its own step limit.
+import models
+import verify
+
+fn clamp() -> String {
+    let r = verify.verify(models.clamp())
+    if !r.complete() { trap() }
+    r.text()
+}
+
+// `s + xs[i]` can overflow, so `sum` is not complete; everything else is
+// proved.
+fn sum() -> String {
+    let r = verify.verify(models.sum())
+    if r.complete() || r.proved() != r.results.len() - 2 { trap() }
+    r.text()
+}
+
+const CLAMP: str = clamp()
+const SUM: str = sum()
+
+fn main() {
+    print(CLAMP)
+    print(SUM)
+}

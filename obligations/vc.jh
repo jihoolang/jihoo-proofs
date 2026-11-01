@@ -1,0 +1,441 @@
+// A model of the integer part of jihoo's MIR and the obligations its checks
+// give. The model and this generator are trusted: they are the semantics.
+import linear
+
+pub enum Operand {
+    Local(i64)
+    Const(i128)
+}
+
+pub enum Cmp {
+    Lt
+    Le
+    Gt
+    Ge
+    Eq
+    Ne
+}
+
+pub enum Rvalue {
+    Use(Operand)
+    // `+` and `-` trap on overflow (the debug build's MIR `Bin`, checked).
+    Add(Operand, Operand)
+    Sub(Operand, Operand)
+    Compare(Cmp, Operand, Operand)
+    // MIR's bounds check: `a as u64 < b as u64` with `b` a length, which is
+    // `0 <= a && a < b` because a length is never negative.
+    InBounds(Operand, Operand)
+    // A value the model does not follow (a load, a call's result): only its
+    // type's range is known.
+    Opaque
+}
+
+pub enum Stmt {
+    Assign(i64, Rvalue)
+}
+
+pub enum Term {
+    Goto(i64)
+    // MIR's `switch _b [0 => zero; else other]` on a bool.
+    Switch(i64, i64, i64)
+    // `assert _b, msg -> next`.
+    Assert(i64, String, i64)
+    Return
+    Unreachable
+}
+
+pub struct Block {
+    pub stmts: Vec(Stmt)
+    pub term: Term
+}
+
+// A local's values: an integer range, or anything else (a bool, a slice).
+pub enum Kind {
+    Int(i128, i128)
+    Other
+}
+
+pub struct Decl {
+    pub name: String
+    pub kind: Kind
+}
+
+// A fact about locals, `a op b`; `_0` is the result in postconditions.
+pub struct Fact {
+    pub op: Cmp
+    pub a: Operand
+    pub b: Operand
+}
+
+pub fn fact(op: Cmp, a: Operand, b: Operand) -> Fact { Fact { op, a, b } }
+
+pub struct Function {
+    pub name: String
+    pub locals: Vec(Decl)
+    pub blocks: Vec(Block)
+    pub requires: Vec(Fact)
+    pub ensures: Vec(Fact)
+    // Loop heads and what holds each time control reaches them.
+    pub invariants: Vec((i64, Vec(Fact)))
+}
+
+pub fn i64_range() -> Kind { Kind.Int(-(1 << 63), (1 << 63) - 1) }
+pub fn len_range() -> Kind { Kind.Int(0, (1 << 63) - 1) }
+
+pub struct Obligation {
+    pub function: String
+    pub what: String
+    pub goal: linear.Goal
+}
+
+// What a local holds on a path, over the values at the path's start
+// (variable `v` for local `v`) and fresh variables for opaque results.
+enum Sym {
+    Num(linear.Lin)
+    Bool(Vec(Fact2))
+    Unknown
+}
+
+// A condition over linear forms, as `Rvalue.Compare` or `InBounds` made it.
+struct Fact2 {
+    op: Cmp
+    a: linear.Lin
+    b: linear.Lin
+}
+
+struct Path {
+    block: i64
+    state: Vec(Sym)
+    facts: Vec(linear.Lin)
+    // The range of each variable: the locals, then the fresh ones.
+    ranges: Vec(Kind)
+    steps: i64
+}
+
+fn clone_sym(s: Sym) -> Sym {
+    match s {
+        Num(l) => Sym.Num(l.clone())
+        Bool(cs) => {
+            var out = Vec(Fact2).new()
+            for c in cs { out.push(Fact2 { op: c.op, a: c.a.clone(), b: c.b.clone() }) }
+            Sym.Bool(out)
+        }
+        Unknown => Sym.Unknown
+    }
+}
+
+fn clone_lins(xs: [linear.Lin]) -> Vec(linear.Lin) {
+    var out = Vec(linear.Lin).new()
+    for x in xs { out.push(x.clone()) }
+    out
+}
+
+fn operand(p: Path, o: Operand) -> Option(linear.Lin) {
+    match o {
+        Const(c) => Some(linear.Lin.num(c))
+        Local(l) => match p.state[l] {
+            Num(x) => Some(x.clone())
+            Bool(_) => None
+            Unknown => None
+        }
+    }
+}
+
+// The forms that are `>= 0` exactly when `a op b`; None for `!=`, which is
+// not one conjunction of linear facts.
+fn lins(op: Cmp, a: linear.Lin, b: linear.Lin) -> Option(Vec(linear.Lin)) {
+    var out = Vec(linear.Lin).new()
+    match op {
+        Lt => out.push(b.minus(a).shift(-1))
+        Le => out.push(b.minus(a))
+        Gt => out.push(a.minus(b).shift(-1))
+        Ge => out.push(a.minus(b))
+        Eq => {
+            out.push(a.minus(b))
+            out.push(b.minus(a))
+        }
+        Ne => return None
+    }
+    Some(out)
+}
+
+fn negate(op: Cmp) -> Cmp {
+    match op {
+        Lt => Cmp.Ge
+        Le => Cmp.Gt
+        Gt => Cmp.Le
+        Ge => Cmp.Lt
+        Eq => Cmp.Ne
+        Ne => Cmp.Eq
+    }
+}
+
+fn range_facts(k: Kind, x: linear.Lin, inout out: Vec(linear.Lin)) {
+    match k {
+        Int(lo, hi) => {
+            out.push(x.shift(-lo))
+            out.push(x.scale(-1).shift(hi))
+        }
+        Other => {}
+    }
+}
+
+struct Gen {
+    out: Vec(Obligation)
+    errors: Vec(String)
+}
+
+impl Gen {
+    // The path's facts imply `claim`. Range facts are added only for the
+    // variables the goal names; they hold for every variable.
+    fn obligation(inout self, f: Function, p: Path, what: str, sink claim: linear.Lin) {
+        var facts = clone_lins(p.facts.as_slice())
+        for v in 0..p.ranges.len() {
+            var named = claim.coef(v) != 0
+            for x in p.facts {
+                if x.coef(v) != 0 { named = true }
+            }
+            if named { range_facts(p.ranges[v], linear.Lin.of(v), &facts) }
+        }
+        self.out.push(Obligation {
+            function: f.name.clone()
+            what: "bb" + p.block.to_string() + ": " + what
+            goal: linear.Goal { facts, claim }
+        })
+    }
+
+    // Each linear part of `c` must hold on this path.
+    fn require(inout self, f: Function, p: Path, what: str, c: Fact2) {
+        match lins(c.op, c.a.clone(), c.b.clone()) {
+            Some(ls) => {
+                for l in ls { self.obligation(f, p, what, l.clone()) }
+            }
+            None => self.errors.push(f.name.as_str() + ": bb" + p.block.to_string() + ": " + what + ": `!=` is not linear")
+        }
+    }
+}
+
+fn condition(p: Path, x: Fact) -> Option(Fact2) {
+    let Some(a) = operand(p, x.a) else { return None }
+    let Some(b) = operand(p, x.b) else { return None }
+    Some(Fact2 { op: x.op, a, b })
+}
+
+fn assume(inout p: Path, c: Fact2) {
+    match lins(c.op, c.a.clone(), c.b.clone()) {
+        Some(ls) => {
+            for l in ls { p.facts.push(l.clone()) }
+        }
+        None => {}
+    }
+}
+
+fn invariant(f: Function, block: i64) -> Option(i64) {
+    for i in 0..f.invariants.len() {
+        if f.invariants[i].0 == block { return Some(i) }
+    }
+    None
+}
+
+// A path starting at `block`: every local is its own variable, inside its
+// range, and `facts` hold.
+fn start(f: Function, block: i64, facts: [Fact]) -> Path {
+    var p = Path {
+        block,
+        state: Vec(Sym).new(),
+        facts: Vec(linear.Lin).new(),
+        ranges: Vec(Kind).new(),
+        steps: 0
+    }
+    for v in 0..f.locals.len() {
+        p.ranges.push(f.locals[v].kind)
+        match f.locals[v].kind {
+            Int(_, _) => p.state.push(Sym.Num(linear.Lin.of(v)))
+            Other => p.state.push(Sym.Unknown)
+        }
+    }
+    for x in facts {
+        match condition(p, x) {
+            Some(c) => assume(&p, c)
+            None => {}
+        }
+    }
+    p
+}
+
+fn clone_path(p: Path, block: i64) -> Path {
+    var state = Vec(Sym).new()
+    for s in p.state { state.push(clone_sym(s)) }
+    var ranges = Vec(Kind).new()
+    for k in p.ranges { ranges.push(k) }
+    Path { block, state, facts: clone_lins(p.facts.as_slice()), ranges, steps: p.steps + 1 }
+}
+
+fn holds(inout g: Gen, f: Function, p: Path, what: str, facts: [Fact]) {
+    for x in facts {
+        match condition(p, x) {
+            Some(c) => g.require(f, p, what, c)
+            None => g.errors.push(
+                f.name.as_str() + ": " + what + ": a fact names a bool or opaque local"
+            )
+        }
+    }
+}
+
+fn assign(inout g: Gen, f: Function, inout p: Path, dst: i64, rv: Rvalue) {
+    let value = match rv {
+        Use(o) => match o {
+            Local(l) => clone_sym(p.state[l])
+            Const(c) => Sym.Num(linear.Lin.num(c))
+        }
+        Add(a, b) | Sub(a, b) => {
+            match (operand(p, a), operand(p, b)) {
+                (Some(x), Some(y)) => {
+                    let r = match rv {
+                        Add(_, _) => x.plus(y)
+                        _ => x.minus(y)
+                    }
+                    match f.locals[dst].kind {
+                        Int(lo, hi) => {
+                            g.obligation(f, p, "no overflow", r.shift(-lo))
+                            g.obligation(f, p, "no overflow", r.scale(-1).shift(hi))
+                        }
+                        Other => {}
+                    }
+                    Sym.Num(r)
+                }
+                _ => {
+                    g.errors.push(f.name.as_str() + ": bb" + p.block.to_string() + ": arithmetic on an unknown value")
+                    Sym.Unknown
+                }
+            }
+        }
+        Compare(op, a, b) => match (operand(p, a), operand(p, b)) {
+            (Some(x), Some(y)) => {
+                var cs = Vec(Fact2).new()
+                cs.push(Fact2 { op, a: x, b: y })
+                Sym.Bool(cs)
+            }
+            _ => Sym.Unknown
+        }
+        InBounds(i, n) => match (operand(p, i), operand(p, n)) {
+            (Some(x), Some(y)) => {
+                var cs = Vec(Fact2).new()
+                cs.push(Fact2 { op: Cmp.Ge, a: x.clone(), b: linear.Lin.num(0) })
+                cs.push(Fact2 { op: Cmp.Lt, a: x, b: y })
+                Sym.Bool(cs)
+            }
+            _ => Sym.Unknown
+        }
+        Opaque => Sym.Unknown
+    }
+    match value {
+        Unknown => match f.locals[dst].kind {
+            Int(_, _) => {
+                let x = linear.Lin.of(p.ranges.len())
+                p.ranges.push(f.locals[dst].kind)
+                p.state[dst] = Sym.Num(x)
+            }
+            Other => p.state[dst] = Sym.Unknown
+        }
+        _ => p.state[dst] = value
+    }
+}
+
+// Follows one path to its end: a return, a loop head or a trap.
+fn walk(inout g: Gen, f: Function, sink first: Path) {
+    var work = Vec(Path).new()
+    work.push(first)
+    loop {
+        let Some(path) = work.pop() else { break }
+        var p = path
+        // Every edge into a loop head, from any terminator, ends the path there.
+        if p.steps > 0 {
+            match invariant(f, p.block) {
+                Some(i) => {
+                    let what = "invariant of bb" + p.block.to_string()
+                    holds(&g, f, p, what.as_str(), f.invariants[i].1.as_slice())
+                    continue
+                }
+                None => {}
+            }
+        }
+        if p.steps > f.blocks.len() * 4 {
+            g.errors.push(
+                f.name.as_str() + ": a loop without an invariant reaches bb" + p.block.to_string()
+            )
+            continue
+        }
+        let b = f.blocks[p.block]
+        for s in b.stmts {
+            match s {
+                Assign(dst, rv) => assign(&g, f, &p, dst, rv)
+            }
+        }
+        match b.term {
+            Goto(t) => work.push(clone_path(p, t))
+            Switch(c, zero, other) => {
+                var no = clone_path(p, zero)
+                var yes = clone_path(p, other)
+                match p.state[c] {
+                    Bool(cs) => {
+                        for x in cs { assume(
+                            &yes,
+                            Fact2 { op: x.op, a: x.a.clone(), b: x.b.clone() }
+                        ) }
+                        // `!(a && b)` is not a conjunction; only one fact negates.
+                        if cs.len() == 1 {
+                            assume(
+                                &no,
+                                Fact2 {
+                                    op: negate(cs[0].op),
+                                    a: cs[0].a.clone(),
+                                    b: cs[0].b.clone()
+                                }
+                            )
+                        }
+                    }
+                    _ => {}
+                }
+                work.push(no)
+                work.push(yes)
+            }
+            Assert(c, msg, next) => {
+                var q = clone_path(p, next)
+                match p.state[c] {
+                    Bool(cs) => {
+                        for x in cs {
+                            let fx = Fact2 { op: x.op, a: x.a.clone(), b: x.b.clone() }
+                            g.require(f, p, msg.as_str(), fx)
+                            assume(&q, Fact2 { op: x.op, a: x.a.clone(), b: x.b.clone() })
+                        }
+                    }
+                    _ => g.errors.push(f.name.as_str() + ": bb" + p.block.to_string() + ": " + msg.as_str() + ": unknown condition")
+                }
+                work.push(q)
+            }
+            Return => holds(&g, f, p, "ensures", f.ensures.as_slice())
+            Unreachable => g.errors.push(
+                f.name.as_str() + ": bb" + p.block.to_string() + " is reached"
+            )
+        }
+    }
+}
+
+pub struct Obligations {
+    pub list: Vec(Obligation)
+    pub errors: Vec(String)
+}
+
+// The obligations of a function: from its entry under `requires`, and from
+// each loop head under its invariant.
+pub fn generate(f: Function) -> Obligations {
+    var g = Gen { out: Vec(Obligation).new(), errors: Vec(String).new() }
+    walk(&g, f, start(f, 0, f.requires.as_slice()))
+    for inv in f.invariants {
+        walk(&g, f, start(f, inv.0, inv.1.as_slice()))
+    }
+    match g {
+        Gen { out, errors } => Obligations { list: out, errors }
+    }
+}

@@ -1,0 +1,158 @@
+// An untrusted prover: Fourier-Motzkin elimination that remembers how each
+// derived fact was made from the goal's facts, so a contradiction comes
+// with the weights `linear.check` needs. Its bugs can only lose proofs.
+import linear
+
+struct Row {
+    lin: linear.Lin
+    // The weight of each original fact; the last is the negated claim's.
+    weights: Vec(i128)
+}
+
+const MAX_ROWS: i64 = 4096
+
+fn abs(x: i128) -> i128 { if x < 0 { -x } else { x } }
+
+fn gcd(a: i128, b: i128) -> i128 {
+    var x = abs(a)
+    var y = abs(b)
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    x
+}
+
+// Divides a row by the common factor of all its numbers, which keeps the
+// row equal to the weighted sum of its originals.
+fn reduce(r: Row) -> Row {
+    var g = gcd(r.lin.constant, 0)
+    for c in r.lin.coefs { g = gcd(g, c) }
+    for w in r.weights { g = gcd(g, w) }
+    if g <= 1 {
+        return Row { lin: r.lin.clone(), weights: r.weights.clone() }
+    }
+    var coefs = Vec(i128).new()
+    for c in r.lin.coefs { coefs.push(c / g) }
+    var weights = Vec(i128).new()
+    for w in r.weights { weights.push(w / g) }
+    Row { lin: linear.Lin { coefs, constant: r.lin.constant / g }, weights }
+}
+
+fn combine(p: Row, a: i128, q: Row, b: i128) -> Row {
+    var weights = Vec(i128).new()
+    for i in 0..p.weights.len() { weights.push(p.weights[i] * a + q.weights[i] * b) }
+    reduce(Row { lin: p.lin.combine(a, q.lin, b), weights })
+}
+
+fn contradiction(rows: [Row]) -> Option(linear.Certificate) {
+    for r in rows {
+        if r.lin.is_constant() && r.lin.constant < 0 {
+            return Some(linear.Certificate { weights: r.weights.clone() })
+        }
+    }
+    None
+}
+
+// The facts that share a variable with the claim, directly or through other
+// such facts. The others cannot help, so their weight stays zero.
+fn relevant(g: linear.Goal) -> Vec(bool) {
+    var seen = Vec(bool).new()
+    for v in 0..g.claim.vars() { seen.push(g.claim.coef(v) != 0) }
+    var used = Vec(bool).filled(g.facts.len(), false)
+    var changed = true
+    while changed {
+        changed = false
+        for i in 0..g.facts.len() {
+            if !used[i] {
+                let f = g.facts[i]
+                var touches = false
+                for v in 0..f.vars() {
+                    if f.coef(v) != 0 && v < seen.len() && seen[v] { touches = true }
+                }
+                if touches {
+                    used[i] = true
+                    changed = true
+                    for v in 0..f.vars() {
+                        if f.coef(v) != 0 {
+                            while seen.len() <= v { seen.push(false) }
+                            seen[v] = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    used
+}
+
+// The variable whose elimination makes the fewest new rows, or -1 when no
+// row has a variable left.
+fn pick(rows: [Row], n: i64) -> i64 {
+    var best = -1
+    var best_cost = 0
+    for v in 0..n {
+        var pos = 0
+        var neg = 0
+        for r in rows {
+            let c = r.lin.coef(v)
+            if c > 0 { pos += 1 }
+            if c < 0 { neg += 1 }
+        }
+        if pos + neg > 0 {
+            let cost = pos * neg - pos - neg
+            if best < 0 || cost < best_cost {
+                best = v
+                best_cost = cost
+            }
+        }
+    }
+    best
+}
+
+pub fn prove(g: linear.Goal) -> Result(linear.Certificate, String) {
+    let m = g.facts.len() + 1
+    let used = relevant(g)
+    var n = g.claim.vars()
+    var rows = Vec(Row).new()
+    for i in 0..m {
+        if i == g.facts.len() || used[i] {
+            var weights = Vec(i128).filled(m, 0)
+            weights[i] = 1
+            let lin = if i < g.facts.len() {
+                g.facts[i].clone()
+            } else { g.claim.scale(-1).shift(-1) }
+            if lin.vars() > n { n = lin.vars() }
+            rows.push(Row { lin, weights })
+        }
+    }
+    loop {
+        match contradiction(rows.as_slice()) {
+            Some(c) => return Ok(c)
+            None => {}
+        }
+        let v = pick(rows.as_slice(), n)
+        if v < 0 { return Err("no linear proof") }
+        var next = Vec(Row).new()
+        for r in rows {
+            // A row with no variables left and a non-negative constant says nothing.
+            if r.lin.coef(v) == 0 && !r.lin.is_constant() {
+                next.push(Row { lin: r.lin.clone(), weights: r.weights.clone() })
+            }
+        }
+        for p in rows {
+            let a = p.lin.coef(v)
+            if a > 0 {
+                for q in rows {
+                    let b = q.lin.coef(v)
+                    if b < 0 {
+                        next.push(combine(p, -b, q, a))
+                        if next.len() > MAX_ROWS { return Err("too many derived facts") }
+                    }
+                }
+            }
+        }
+        rows = next
+    }
+}

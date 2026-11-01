@@ -14,6 +14,7 @@ library or its compatibility promises.
 | [`kernel`](kernel/README.md) | a jihoo port of Horn's trusted ground certificate checker, run at runtime and at compile time |
 | [`proofs`](proofs/README.md) | general theorems by structural induction and derivation reuse, checked at compile time |
 | [`verified-codec`](verified-codec/README.md) | generated enum codecs with compile-time certificates bound to the executable tables |
+| [`obligations`](obligations/README.md) | MIR's bounds and overflow checks and function contracts, proved with checked linear certificates (jihoo 0.5 research) |
 
 ## Use
 
@@ -74,6 +75,8 @@ compiler, without `-I` paths into this repository. Work in this order:
 
 Translating jihoo functions into theories, and source-level contracts, need
 an explicit semantics; step 3 is the first bounded model toward that.
+[`obligations`](obligations/README.md) starts the other end for jihoo 0.5:
+a model of MIR's integer part whose checks are proved by linear certificates.
 
 ## License
 

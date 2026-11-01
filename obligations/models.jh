@@ -1,0 +1,131 @@
+// Two functions' MIR, as `jihoo emit-mir` printed it (0.4.2, debug build),
+// written in the model by hand. Block and local numbers are the compiler's;
+// `<pending>` blocks are `Unreachable`.
+import vc
+
+fn l(i: i64) -> vc.Operand { vc.Operand.Local(i) }
+fn k(c: i128) -> vc.Operand { vc.Operand.Const(c) }
+fn set(dst: i64, rv: vc.Rvalue) -> vc.Stmt { vc.Stmt.Assign(dst, rv) }
+
+fn block(sink stmts: Vec(vc.Stmt), sink term: vc.Term) -> vc.Block { vc.Block { stmts, term } }
+fn jump(t: i64) -> vc.Block { block(Vec(vc.Stmt).new(), vc.Term.Goto(t)) }
+fn pending() -> vc.Block { block(Vec(vc.Stmt).new(), vc.Term.Unreachable) }
+
+fn local(name: str, kind: vc.Kind) -> vc.Decl { vc.Decl { name: name.to_string(), kind } }
+
+// fn clamp(x: i64, lo: i64, hi: i64) -> i64 {
+//     if x < lo { return lo }
+//     if x > hi { return hi }
+//     x
+// }
+// requires lo <= hi, ensures lo <= result <= hi
+pub fn clamp() -> vc.Function {
+    var locals = Vec(vc.Decl).new()
+    locals.push(local("_0", vc.i64_range()))
+    locals.push(local("x", vc.i64_range()))
+    locals.push(local("lo", vc.i64_range()))
+    locals.push(local("hi", vc.i64_range()))
+    locals.push(local("_4", vc.Kind.Other))
+    locals.push(local("_5", vc.Kind.Other))
+    locals.push(local("_6", vc.i64_range()))
+
+    var blocks = Vec(vc.Block).new()
+    var b0 = Vec(vc.Stmt).new()
+    b0.push(set(4, vc.Rvalue.Compare(vc.Cmp.Lt, l(1), l(2))))
+    blocks.push(block(b0, vc.Term.Switch(4, 2, 1)))
+    var b1 = Vec(vc.Stmt).new()
+    b1.push(set(0, vc.Rvalue.Use(l(2))))
+    blocks.push(block(b1, vc.Term.Return))
+    blocks.push(jump(3))
+    var b3 = Vec(vc.Stmt).new()
+    b3.push(set(5, vc.Rvalue.Compare(vc.Cmp.Gt, l(1), l(3))))
+    blocks.push(block(b3, vc.Term.Switch(5, 9, 8)))
+    for _ in 4..8 { blocks.push(pending()) }
+    var b8 = Vec(vc.Stmt).new()
+    b8.push(set(0, vc.Rvalue.Use(l(3))))
+    blocks.push(block(b8, vc.Term.Return))
+    blocks.push(jump(10))
+    var b10 = Vec(vc.Stmt).new()
+    b10.push(set(6, vc.Rvalue.Use(l(1))))
+    b10.push(set(0, vc.Rvalue.Use(l(6))))
+    blocks.push(block(b10, vc.Term.Return))
+    for _ in 11..16 { blocks.push(pending()) }
+
+    var requires = Vec(vc.Fact).new()
+    requires.push(vc.fact(vc.Cmp.Le, l(2), l(3)))
+    var ensures = Vec(vc.Fact).new()
+    ensures.push(vc.fact(vc.Cmp.Le, l(2), l(0)))
+    ensures.push(vc.fact(vc.Cmp.Le, l(0), l(3)))
+    vc.Function {
+        name: "clamp".to_string(), locals, blocks, requires, ensures,
+        invariants: Vec((i64, Vec(vc.Fact))).new()
+    }
+}
+
+// fn sum(xs: [i64]) -> i64 {
+//     var s = 0
+//     var i = 0
+//     while i < xs.len { s += xs[i]; i += 1 }
+//     s
+// }
+// The place `_1.1` (xs.len) is local 14. bb4's
+// `_7 = _5 as u64; _8 = _1.1 as u64; _6 = _7 < _8` is `InBounds(_5, _1.1)`.
+// `invariant` is what holds at the loop head bb1.
+pub fn sum_with(sink invariant: Vec(vc.Fact)) -> vc.Function {
+    var locals = Vec(vc.Decl).new()
+    locals.push(local("_0", vc.i64_range()))
+    locals.push(local("xs", vc.Kind.Other))
+    locals.push(local("s", vc.i64_range()))
+    locals.push(local("i", vc.i64_range()))
+    locals.push(local("_4", vc.Kind.Other))
+    locals.push(local("_5", vc.i64_range()))
+    locals.push(local("_6", vc.Kind.Other))
+    locals.push(local("_7", vc.Kind.Other))
+    locals.push(local("_8", vc.Kind.Other))
+    locals.push(local("_9", vc.Kind.Other))
+    for name in ["_10", "_11", "_12", "_13"] { locals.push(local(name, vc.i64_range())) }
+    locals.push(local("xs.len", vc.len_range()))
+
+    var blocks = Vec(vc.Block).new()
+    var b0 = Vec(vc.Stmt).new()
+    b0.push(set(2, vc.Rvalue.Use(k(0))))
+    b0.push(set(3, vc.Rvalue.Use(k(0))))
+    blocks.push(block(b0, vc.Term.Goto(1)))
+    var b1 = Vec(vc.Stmt).new()
+    b1.push(set(4, vc.Rvalue.Compare(vc.Cmp.Lt, l(3), l(14))))
+    blocks.push(block(b1, vc.Term.Switch(4, 2, 4)))
+    var b2 = Vec(vc.Stmt).new()
+    b2.push(set(13, vc.Rvalue.Use(l(2))))
+    b2.push(set(0, vc.Rvalue.Use(l(13))))
+    blocks.push(block(b2, vc.Term.Return))
+    blocks.push(pending())
+    var b4 = Vec(vc.Stmt).new()
+    b4.push(set(5, vc.Rvalue.Use(l(3))))
+    b4.push(set(6, vc.Rvalue.InBounds(l(5), l(14))))
+    blocks.push(block(b4, vc.Term.Assert(6, "index out of bounds", 6)))
+    blocks.push(pending())
+    var b6 = Vec(vc.Stmt).new()
+    b6.push(set(9, vc.Rvalue.Opaque))
+    b6.push(set(10, vc.Rvalue.Opaque))
+    b6.push(set(11, vc.Rvalue.Add(l(2), l(10))))
+    b6.push(set(2, vc.Rvalue.Use(l(11))))
+    b6.push(set(12, vc.Rvalue.Add(l(3), k(1))))
+    b6.push(set(3, vc.Rvalue.Use(l(12))))
+    blocks.push(block(b6, vc.Term.Goto(1)))
+    for _ in 7..10 { blocks.push(pending()) }
+
+    var invariants = Vec((i64, Vec(vc.Fact))).new()
+    invariants.push((1, invariant))
+    vc.Function {
+        name: "sum".to_string(), locals, blocks, requires: Vec(vc.Fact).new(),
+        ensures: Vec(vc.Fact).new(), invariants
+    }
+}
+
+// 0 <= i <= xs.len
+pub fn sum() -> vc.Function {
+    var inv = Vec(vc.Fact).new()
+    inv.push(vc.fact(vc.Cmp.Le, k(0), l(3)))
+    inv.push(vc.fact(vc.Cmp.Le, l(3), l(14)))
+    sum_with(inv)
+}

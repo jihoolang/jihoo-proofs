@@ -40,6 +40,7 @@ def main():
             ("kernel", "kernel/check.py", reference, out / "kernel/report.json"),
             ("proofs", "proofs/check.py", reference, out / "proofs/report.json"),
             ("codec", "verified-codec/check.py", [], out / "verified-codec/report.json"),
+            ("obligations", "obligations/check.py", [], out / "obligations/report.json"),
         ]
         for name, script, options, result in suites:
             print(f"Checking {name}", flush=True)

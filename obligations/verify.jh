@@ -1,0 +1,68 @@
+// Generates a function's obligations, asks the untrusted prover for each
+// certificate and accepts only what the trusted checker accepts.
+import fm
+import linear
+import vc
+
+pub enum Verdict {
+    // The checked certificate's number of facts used.
+    Proved(i64)
+    Unproved(String)
+}
+
+pub struct Result1 {
+    pub what: String
+    pub verdict: Verdict
+}
+
+pub struct Report {
+    pub function: String
+    pub results: Vec(Result1)
+    pub errors: Vec(String)
+}
+
+impl Report {
+    pub fn proved(self) -> i64 {
+        var n = 0
+        for r in self.results {
+            match r.verdict {
+                Proved(_) => n += 1
+                Unproved(_) => {}
+            }
+        }
+        n
+    }
+
+    pub fn complete(self) -> bool {
+        self.errors.len() == 0 && self.proved() == self.results.len()
+    }
+
+    pub fn text(self) -> String {
+        var out = self.function.as_str() + ": " + self.proved().to_string() + " of " +
+            self.results.len().to_string() + " obligations proved\n"
+        for r in self.results {
+            match r.verdict {
+                Proved(n) => out += "  proved   " + r.what.as_str() + " (" + n.to_string() + " facts)\n"
+                Unproved(why) => out += "  UNPROVED " + r.what.as_str() + ": " + why.as_str() + "\n"
+            }
+        }
+        for e in self.errors { out += "  error    " + e.as_str() + "\n" }
+        out
+    }
+}
+
+pub fn verify(f: vc.Function) -> Report {
+    let obs = vc.generate(f)
+    var results = Vec(Result1).new()
+    for o in obs.list {
+        let verdict = match fm.prove(o.goal) {
+            Ok(c) => match linear.check(o.goal, c) {
+                Ok(n) => Verdict.Proved(n)
+                Err(e) => Verdict.Unproved("the checker rejected the prover: " + e.as_str())
+            }
+            Err(e) => Verdict.Unproved(e.to_string())
+        }
+        results.push(Result1 { what: o.what.clone(), verdict })
+    }
+    Report { function: f.name.clone(), results, errors: obs.errors.clone() }
+}
