@@ -203,6 +203,14 @@ fn term(x: sexp.Sexp) -> Result(vc.Term, String) {
                         for a in xs[i].list()?[1..] { site.args.push(argument(a)?) }
                     }
                     "at" => site.at = at(xs[i])?
+                    "changes" => {
+                        for v in xs[i].list()?[1..] { site.changes.push(index(v)?) }
+                    }
+                    // The callee's fields at the call, and a callee that
+                    // never returns: this experiment maps no fields into
+                    // contracts and proves no such call unreachable, which
+                    // loses proofs only.
+                    "fields" | "never" => {}
                     t => return Err("unknown part of a call `" + t + "`")
                 }
             }
@@ -253,6 +261,9 @@ fn function(x: sexp.Sexp) -> Result(vc.Function, String) {
         let ps = xs[j].list()?
         match tag(xs[j])? {
             "lengths" => f.lengths = pairs(xs[j], "lengths")?
+            // `(VAR LOCAL [*] FIELD...)`: integer fields followed as
+            // variables, which the statements and calls already name.
+            "fields" => {}
             "derefs" => f.derefs = pairs(xs[j], "derefs")?
             "entries" => f.entries = pairs(xs[j], "entries")?
             // Each clause with its span, `(requires (op A B) (at lo hi))`.

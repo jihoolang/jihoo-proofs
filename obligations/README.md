@@ -223,6 +223,21 @@ Random inputs find a wrong rule only on inputs that reach it: a model that
 believed slices hold at most 1,000 elements would pass, since the probes'
 slices are short.
 
+The compiler also follows integer fields of locals and borrowed
+parameters, counts a call that never returns (`panic`) as a check, and
+proves a small callee's panic away at each call (`v[i]` calling
+`Vec.index`). A panic fails at compile time with the callee's message, so
+`differential.py` reads the calls that led there from the diagnostic's
+notes: the call to the function that never returns is that check, and
+the call into the function that panicked is the caller's. `samples/fields.jh`
+has a struct changed through `inout` methods with contracts over its
+field, a call that proves `at`'s panic away and one that cannot, and a
+`!=` it cannot rule out. A compiler changed to prove every such call is
+caught there. `load.jh` reads the new parts of the model (`fields`, and a
+call's `changes`, `fields` and `never`); this experiment gives the
+variables in `changes` new values and otherwise ignores them, which only
+loses proofs.
+
 ## Inferring loop invariants
 
 `infer.jh` proposes invariants for the loop heads that have none (the
