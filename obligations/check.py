@@ -112,6 +112,21 @@ def main():
                 if r.returncode:
                     raise SystemExit(f"differential {key}:\n{r.stdout}{r.stderr}")
                 differential[key] = json.loads(result.read_text())["results"]
+        # The compiler's own verifier, which removes the checks it proves
+        # from programs, against the interpreter on the same samples, when
+        # the compiler has `verify --machine`.
+        probe_verify = run(jihoo, "verify", "--machine", HERE / "samples/abs.jh")
+        if "unknown command" not in probe_verify.stderr and "usage" not in probe_verify.stderr:
+            for name in ["abs", "bugs", "ints", "arrays", "calls", "fields"]:
+                for mode in [[], ["--release"]]:
+                    key = name + " compiler" + (" --release" if mode else "")
+                    result = out / f"differential-{name}-compiler{'-release' if mode else ''}.json"
+                    r = run(sys.executable, HERE / "differential.py", "--compiler", jihoo,
+                            HERE / f"samples/{name}.jh", "--count", "20", "--report", result,
+                            "--verdicts", "compiler", *mode)
+                    if r.returncode:
+                        raise SystemExit(f"differential {key}:\n{r.stdout}{r.stderr}")
+                    differential[key] = json.loads(result.read_text())["results"]
         for name, old, new in MUTATIONS:
             r = run(sys.executable, HERE / "differential.py", "--compiler", jihoo,
                     HERE / f"samples/{name}.jh", "--count", "20", "--mutate", old, new)

@@ -229,7 +229,12 @@ def main():
         else:
             verified = run(*verifier, "--machine", *(["--infer"] if args.infer else []),
                            tmp / "model.obligations", *names)
-        if verified.returncode:
+        # `jihoo verify` exits with 1 after printing its verdicts when a
+        # contract is not proved, which the samples have on purpose.
+        failed = verified.returncode != 0
+        if args.verdicts == "compiler" and verified.returncode == 1 and not verified.stderr:
+            failed = False
+        if failed:
             sys.exit(verified.stdout + verified.stderr)
 
         # A check is proved when every obligation with its span is.

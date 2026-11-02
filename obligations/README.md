@@ -219,6 +219,15 @@ python3 obligations/differential.py --compiler jihoo obligations/samples/calls.j
 python3 obligations/corpus.py --compiler jihoo --checkout ../jihoo --infer --verdicts compiler
 ```
 
+`check.py` runs the compiler's verdicts on every sample, in debug and
+`--release` builds, when the compiler has `verify --machine`, so CI tests
+the compiler's generator against the interpreter on x86_64 and aarch64.
+Since the compiler makes an unproved contract an error, `verify` exits
+with status 1 on the samples that have one on purpose, after its
+verdicts. The model's newer parts (the type invariants a call assumes and
+a writer proves, `add-wrap` and `sub-wrap`) are read and left out by
+`emitted.jh`, which loses proofs only.
+
 Random inputs find a wrong rule only on inputs that reach it: a model that
 believed slices hold at most 1,000 elements would pass, since the probes'
 slices are short.

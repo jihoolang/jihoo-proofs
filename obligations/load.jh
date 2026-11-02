@@ -160,6 +160,8 @@ fn rvalue(x: sexp.Sexp) -> Result(vc.Rvalue, String) {
         "and" => Ok(vc.Rvalue.And(operand(head(x, "and", 2)?[0])?, operand(xs[2])?))
         "not" => Ok(vc.Rvalue.Not(operand(head(x, "not", 1)?[0])?))
         "cast" => Ok(vc.Rvalue.Cast(operand(head(x, "cast", 1)?[0])?))
+        // Wrapping `+% -%`: this experiment does not follow them.
+        "add-wrap" | "sub-wrap" => Ok(vc.Rvalue.Opaque(vc.WHY_OTHER))
         "cmp" => {
             let ps = head(x, "cmp", 3)?
             Ok(vc.Rvalue.Compare(cmp(ps[0].atom()?)?, operand(ps[1])?, operand(ps[2])?))
@@ -210,7 +212,9 @@ fn term(x: sexp.Sexp) -> Result(vc.Term, String) {
                     // never returns: this experiment maps no fields into
                     // contracts and proves no such call unreachable, which
                     // loses proofs only.
-                    "fields" | "never" => {}
+                    // and the type invariants the caller assumes after it
+                    // (`after`), which this experiment does not assume.
+                    "fields" | "never" | "before" | "after" => {}
                     t => return Err("unknown part of a call `" + t + "`")
                 }
             }
@@ -263,7 +267,9 @@ fn function(x: sexp.Sexp) -> Result(vc.Function, String) {
             "lengths" => f.lengths = pairs(xs[j], "lengths")?
             // `(VAR LOCAL [*] FIELD...)`: integer fields followed as
             // variables, which the statements and calls already name.
-            "fields" => {}
+            // Type invariants assumed of the parameters and proved by a
+            // writer: this experiment neither assumes nor proves them.
+            "fields" | "holds-in" | "holds-out" | "writes" => {}
             "derefs" => f.derefs = pairs(xs[j], "derefs")?
             "entries" => f.entries = pairs(xs[j], "entries")?
             // Each clause with its span, `(requires (op A B) (at lo hi))`.
@@ -299,6 +305,9 @@ fn function(x: sexp.Sexp) -> Result(vc.Function, String) {
                 var stmts = Vec(vc.Stmt).new()
                 for k in 2..ps.len - 1 {
                     let qs = ps[k].list()?
+                    // A writer's obligation to keep a type's invariant: this
+                    // experiment proves none, which loses no check's proof.
+                    if qs.len > 0 && qs[0].atom()? == "check" { continue }
                     if (qs.len != 3 && qs.len != 4) || qs[0].atom()? != "set" {
                         return Err("expected (set local value [at])")
                     }
