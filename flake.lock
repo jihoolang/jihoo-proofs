@@ -7,11 +7,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1793503709,
-        "narHash": "sha256-SO/H3cvM+6RHBAZpB//XAbal90zSEVEu9tbaKnBqFrs=",
+        "lastModified": 1793587720,
+        "narHash": "sha256-EmEsT+0YpzRnXSj63srEFZe2vzfWpVnUoJ8ruFyBy2Y=",
         "owner": "jihoolang",
         "repo": "jihoo",
-        "rev": "8b10537cc46232cba7c46a8260f35b25121f5e78",
+        "rev": "760def8ed39f3066eb54c2afd1a8e5c9ab357d2c",
         "type": "github"
       },
       "original": {
